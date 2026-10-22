@@ -41,7 +41,7 @@ pub const MEC_EDGE_REFINE: usize = 120;
 /// Lattice samples per axis of the coarse rescan the polish runs.
 /// The rescan only supplies starting basins; the climb supplies the accuracy, so
 /// this stays coarse enough to cost less than the search it is recovering.
-pub const MEC_POLISH_SCAN_SIDE: usize = 192;
+pub const MEC_POLISH_SCAN_SIDE: usize = 64;
 /// Starting samples the polish climbs from.
 pub const MEC_POLISH_SEEDS: usize = 40;
 /// Divisions of the region span used as the basin separation radius.

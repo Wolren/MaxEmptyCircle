@@ -6,7 +6,7 @@ Finds the largest circle that fits between obstacles.
 
 ![MSRV](https://img.shields.io/badge/rustc-1.88+-ab6000.svg)
 [![Tests](https://img.shields.io/badge/tests-55%20passing-brightgreen.svg)](https://github.com/Wolren/MaxEmptyCircle/actions/workflows/ci.yml)
-[![GEOS](https://img.shields.io/badge/vs%20GEOS-5.04x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
+[![GEOS](https://img.shields.io/badge/vs%20GEOS-7.34x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/Wolren/MaxEmptyCircle?tab=License-1-ov-file)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Wolren-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolren)
 
@@ -58,34 +58,34 @@ measures the solver and not the threading.
 
 | Case | Path | Primitives | MaxEmptyCircle | GEOS | Ratio |
 |------|------|-----------:|---------------:|-----:|------:|
-| points/8 | exact | 8 | **36 us** | 37.0 ms | **1042x** |
-| points/32 | exact | 32 | **179 us** | 60.6 ms | **338x** |
-| points/128 | exact | 128 | **2.53 ms** | 17.6 ms | **7.0x** |
-| points/512 | grid | 512 | **17.4 ms** | 30.5 ms | **1.8x** |
-| lattice/6x6 | exact | 36 | **138 us** | 4.03 ms | **29x** |
-| lattice/12x12 | exact | 144 | **2.07 ms** | 22.4 ms | **11x** |
-| lattice/20x20 | grid | 400 | **16.3 ms** | 73.9 ms | **4.5x** |
-| buildings/3x3 | grid | 36 | **157 us** | 870 us | **5.5x** |
-| buildings/6x6 | grid | 144 | **511 us** | 4.88 ms | **9.6x** |
-| buildings/10x10 | grid | 400 | **1.55 ms** | 20.1 ms | **13x** |
-| segments/16 | grid | 16 | **10.9 ms** | 27.0 ms | **2.5x** |
-| segments/64 | grid | 64 | **11.7 ms** | 70.6 ms | **6.0x** |
-| segments/256 | grid | 256 | **15.4 ms** | 39.2 ms | **2.6x** |
-| confined/points64 | exact | 64 | **302 us** | 305 us | **1.0x** |
+| points/8 | exact | 8 | 31 us | 34.2 ms | 1115x |
+| points/32 | exact | 32 | 180 us | 58.6 ms | 326x |
+| points/128 | exact | 128 | 2.58 ms | 17.9 ms | 7.0x |
+| points/512 | grid | 512 | 13.1 ms | 30.0 ms | 2.3x |
+| lattice/6x6 | exact | 36 | 126 us | 4.13 ms | 33x |
+| lattice/12x12 | exact | 144 | 2.01 ms | 22.3 ms | 11x |
+| lattice/20x20 | grid | 400 | 13.8 ms | 71.8 ms | 5.2x |
+| buildings/3x3 | grid | 36 | 156 us | 886 us | 5.7x |
+| buildings/6x6 | grid | 144 | 519 us | 4.99 ms | 9.6x |
+| buildings/10x10 | grid | 400 | 1.49 ms | 20.5 ms | 14x |
+| segments/16 | grid | 16 | 7.72 ms | 26.6 ms | 3.5x |
+| segments/64 | grid | 64 | 8.45 ms | 71.7 ms | 8.5x |
+| segments/256 | grid | 256 | 11.6 ms | 92.2 ms | 7.9x |
+| confined/points64 | exact | 64 | 392 us | 511 us | 1.3x |
 
-Total 5.04x, 14 of 14 cases faster, no case materially worse. The ratio varies by
-case: p10 1.79x, median 7.73x, p90 309x.
+Total 7.34x, 14 of 14 cases faster, no case materially worse. The ratio varies by
+case: p10 2.29x, median 8.49x, p90 326x.
 
 The point-heavy rows are flattered, because GEOS pays a large fixed cost in its
-branch-and-bound: its 37 ms for 8 sites is mostly overhead. The band on realistic
-work is 1.8x to 13x.
+branch-and-bound: its 34 ms for 8 sites is mostly overhead. The band on realistic
+work is 2.3x to 14x.
 
 Growth stays linear, fitted as `t = c * n^k` over doubling input sizes:
 
 | Sweep | Range | Exponent |
 |-------|-------|---------:|
-| Point obstacles | 10 to 100k | k = 1.05 |
-| Segment obstacles | 10 to 10k | k = 0.20 |
+| Point obstacles | 10 to 100k | k = 1.03 |
+| Segment obstacles | 10 to 10k | k = 0.17 |
 
 `tests/scaling.rs` asserts both exponents stay under the subquadratic bound, so a
 complexity regression fails CI. Segment time is dominated by the recovery polish,
