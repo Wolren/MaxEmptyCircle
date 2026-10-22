@@ -171,7 +171,7 @@ fn polygon_obstacle_matches_geos() {
 #[test]
 fn buildings_match_geos() {
     // A city block: four building footprints as obstacles.
-    let blocks = vec![
+    let blocks = [
         (0.0, 0.0, 20.0, 20.0),
         (60.0, 0.0, 80.0, 20.0),
         (0.0, 60.0, 20.0, 80.0),

@@ -390,19 +390,39 @@ fn polish_global(
             if !region.contains_closed(x, y) {
                 continue;
             }
-            let d = nearest_distance(nb, x, y);
-            if d <= start.2 {
-                continue;
-            }
-            seeds.push((x, y, d));
+            // Every admissible sample is a seed, including ones below the
+            // incumbent. A sample near the true peak can measure *below* the
+            // incumbent because the incumbent was itself a lucky coarse cell,
+            // and discarding it here removes the only starting point from which
+            // the peak's basin can be reached.
+            seeds.push((x, y, nearest_distance(nb, x, y)));
         }
     }
     seeds.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    seeds.truncate(tuning::MEC_POLISH_SEEDS);
+
+    // Greedy spatial dedup. Every sample stays a candidate starting point, but
+    // two samples inside the same basin climb to the same peak, so buying two
+    // climbs there is wasted work. Keeping the strongest representative of each
+    // neighbourhood visits as many basins as the lattice can resolve for a fixed
+    // climb budget, which is what makes the recovery cheap.
+    let separation = span / tuning::MEC_POLISH_BASIN_DIVISIONS as f64;
+    let mut picked: Vec<(f64, f64, f64)> = Vec::with_capacity(tuning::MEC_POLISH_SEEDS);
+    for seed in seeds {
+        if picked.len() >= tuning::MEC_POLISH_SEEDS {
+            break;
+        }
+        if picked
+            .iter()
+            .any(|p| (p.0 - seed.0).hypot(p.1 - seed.1) < separation)
+        {
+            continue;
+        }
+        picked.push(seed);
+    }
 
     let mut best = start;
-    for (x, y, d) in seeds {
-        let (px, py, pd) = polish(nb, region, (x, y, d), span * 1e-12, step_x.max(step_y));
+    for (x, y, d) in picked {
+        let (px, py, pd) = polish(nb, region, (x, y, d), span * 1e-10, step_x.max(step_y));
         if pd > best.2 {
             best = (px, py, pd);
         }

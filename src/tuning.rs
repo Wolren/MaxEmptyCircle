@@ -40,4 +40,10 @@ pub const MEC_EDGE_REFINE: usize = 120;
 /// this stays coarse enough to cost less than the search it is recovering.
 pub const MEC_POLISH_SCAN_SIDE: usize = 192;
 /// Starting samples the polish climbs from.
-pub const MEC_POLISH_SEEDS: usize = 64;
+pub const MEC_POLISH_SEEDS: usize = 40;
+/// Divisions of the region span used as the basin separation radius.
+///
+/// Sampled points closer than `span / this` climb to the same peak, so the dedup
+/// keeps one representative per neighbourhood instead of paying for every sample
+/// inside it.
+pub const MEC_POLISH_BASIN_DIVISIONS: usize = 48;

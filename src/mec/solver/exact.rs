@@ -175,19 +175,25 @@ fn bisector_edge_candidates(best: &mut Option<ExactCandidate>, set: &ObstacleSet
             // straight-line case that a half-separation bound would discard.
             let gap_x = bx - ax;
             let gap_y = by - ay;
-
-            let mx = (ax + bx) * 0.5;
-            let my = (ay + by) * 0.5;
-            // The bisector is perpendicular to (b - a), so its direction is
-            // (-(by - ay), bx - ax), normalised.
-            let dx = gap_y;
-            let dy = -gap_x;
-            let dlen = dx.hypot(dy);
-            if dlen <= tuning::MEC_EPS {
+            if gap_x.hypot(gap_y) <= tuning::MEC_EPS {
                 continue;
             }
-            let dx = dx / dlen;
-            let dy = dy / dlen;
+
+            // Solve the bisector against each edge directly from the
+            // equidistance condition rather than from a cross-product line
+            // intersection. For a point P = e0 + s*e, `|P - A|^2 = |P - B|^2`
+            // expands to a linear equation in `s`:
+            //
+            //     s = (|e0 - B|^2 - |e0 - A|^2) / (2 * (B - A) . e)
+            //
+            // This is exact, has no sign convention to get wrong, and needs no
+            // normalisation of the bisector direction, which is where a
+            // cross-product formulation is easy to invert by mistake.
+            let abx = bx - ax;
+            let aby = by - ay;
+            if abx.hypot(aby) <= tuning::MEC_EPS {
+                continue;
+            }
 
             for r in 0..ring_count {
                 let ring = region.ring_coords(r);
@@ -197,13 +203,13 @@ fn bisector_edge_candidates(best: &mut Option<ExactCandidate>, set: &ObstacleSet
                     let ex = ex1 - ex0;
                     let ey = ey1 - ey0;
 
-                    // Solve m + t*d = e0 + s*e for s, then rebuild the point
-                    // from s so it lies on the edge by construction.
-                    let denom = dx * ey - dy * ex;
+                    let denom = 2.0 * (abx * ex + aby * ey);
                     if denom.abs() <= tuning::MEC_EPS {
                         continue;
                     }
-                    let s = ((mx - ex0) * dy - (my - ey0) * dx) / denom;
+                    let da = (ex0 - ax) * (ex0 - ax) + (ey0 - ay) * (ey0 - ay);
+                    let db = (ex0 - bx) * (ex0 - bx) + (ey0 - by) * (ey0 - by);
+                    let s = (db - da) / denom;
                     if !(0.0..=1.0).contains(&s) {
                         continue;
                     }
