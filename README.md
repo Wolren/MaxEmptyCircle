@@ -9,8 +9,8 @@ restricts where the centre may sit.
 [![crate](https://img.shields.io/crates/v/max-empty-circle.svg)](https://crates.io/crates/max-empty-circle)
 [![docs](https://docs.rs/max-empty-circle/badge.svg)](https://docs.rs/max-empty-circle)
 ![MSRV](https://img.shields.io/badge/rustc-1.88+-ab6000.svg)
-[![Tests](https://img.shields.io/badge/tests-28%20passing-brightgreen.svg)](https://github.com/Wolren/MaxEmptyCircle/actions/workflows/ci.yml)
-[![GEOS](https://img.shields.io/badge/vs%20GEOS-4.08x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
+[![Tests](https://img.shields.io/badge/tests-55%20passing-brightgreen.svg)](https://github.com/Wolren/MaxEmptyCircle/actions/workflows/ci.yml)
+[![GEOS](https://img.shields.io/badge/vs%20GEOS-5.04x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/Wolren/MaxEmptyCircle?tab=License-1-ov-file)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Wolren-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolren)
 
@@ -19,89 +19,73 @@ restricts where the centre may sit.
 A largest empty circle is the biggest circle that fits in open space. Every
 obstacle limits it, so the circle touches the nearest one. This is the dual of
 the maximum inscribed circle: that one sits inside a polygon and is limited by
-the polygon's own boundary, while this one sits between obstacles that need not
-enclose the centre at all.
+the polygon's boundary, while this one sits between obstacles that need not
+enclose the centre.
 
 ## API
 
-| Function | Use |
-|----------|-----|
-| `largest_empty_circle` | one obstacle geometry, optional boundary |
-| `largest_empty_circle_slice` | rayon-parallel batch, input order preserved |
+| Function | Centre confined to |
+|----------|--------------------|
+| `largest_empty_circle` | Caller boundary, else the obstacle convex hull |
+| `largest_empty_circle_slice` | Same, batch over rayon, input order preserved |
 
 `MecResult` reports the centre, the radius and its square, the obstacles the
 circle touches, the candidate count, and the solve path. `MecApproach` names the
 path: `ExactVoronoi` or `GridSolver`.
 
 Obstacles are any `geo_types::Geometry`: points, lines, polygons, multipolygons,
-or a geometry collection whose parts are flattened into one obstacle set. The
-boundary must be polygonal, because "inside" is undefined for a point or a line.
+or a geometry collection whose parts are flattened into one set. The boundary
+must be polygonal, because inside is undefined for a point or a line.
+
+Obstacles that enclose no area, such as a single point or collinear points, give
+a zero-radius circle centred on the obstacle. GEOS answers that case the same way.
 
 Run `cargo run --example quickstart` for a complete program.
 
-## Why a boundary is not optional in spirit
-
-An empty circle between two finite obstacles is unbounded. Two parallel walls
-have an arbitrarily large empty circle far from both, so an unconstrained centre
-has no maximum, and the problem has no answer.
-
-So the region matters, and the crate makes the rule explicit rather than silent.
-With a caller boundary the centre is confined to it. Without one the centre is
-confined to the convex hull of the obstacles, which is the GEOS default: the
-answer then lies among the obstacles, which is what a facility-siting or
-label-placement question usually means. Obstacles that enclose no area, such as a
-single point or a set of collinear points, are rejected with an error naming the
-reason, because no finite answer exists for them.
-
 ## How it solves
 
-The crate picks a path from the obstacle types.
+Point obstacles take an exact path. The maximum of a minimum of distances over a
+closed region is attained at a Voronoi vertex, which is a Delaunay circumcentre,
+or on the region boundary. One triangulation enumerates the interior candidates
+in O(n log n); the boundary family adds ring corners, bisector-edge crossings
+solved from the equidistance condition, and a per-edge refine within one sample
+spacing. Each candidate is re-measured against every site, so a circumcentre with
+a fourth site inside its circle scores lower and loses. The answer is exact, not
+sampled.
 
-**Exact Voronoi, for point obstacles.** The maximum of a minimum of distances over
-a closed region is attained either at an interior point, where three sites must be
-equidistant and none closer, or on the region boundary. Interior optima are
-Voronoi vertices, which are the Delaunay circumcentres, so one triangulation at
-`O(n log n)` enumerates them all. Boundary optima are corners, bisector-edge
-crossings computed from the equidistance condition, or the maximum of one distance
-function along an edge, refined within one sample spacing. Every candidate is
-re-measured against every site, so a circumcentre with a fourth site inside its
-circle scores lower and loses, which is what handles lattice degeneracies. The
-module documentation carries the full completeness argument. This path is exact,
-not approximated.
+Segments and polygons take a branch and bound over the region. The bound is the
+1-Lipschitz property of obstacle distance: no point in a cell of half-size `h`
+clears an obstacle by more than `d(c) + h*sqrt(2)`. Region membership is a filter,
+not part of the bound, so a cell outside still holds the boundary optima. A
+polygon contributes its edges rather than its interior, matching GEOS. When the
+work cap trips, a rescan climbs from one representative per basin.
 
-**Grid search, for segments and polygons.** A branch and bound over the region,
-driven by the 1-Lipschitz property of obstacle distance: no point in a cell of
-half-size `h` can clear an obstacle by more than `d(c) + h*sqrt(2)`. Region
-membership is a filter rather than part of the bound, so a cell outside still
-carries a valid bound and still holds the boundary optima. When the work cap
-trips, a coarse rescan of the region climbs from one representative of each basin,
-which is what stops a single walk settling in the wrong one.
-
-The reported radius is always measured against the obstacle set at the returned
-centre, never inferred from a bound, so a returned circle is empty by
-construction.
+The reported radius is measured against the obstacle set at the returned centre,
+never read off a bound.
 
 ## Correctness
 
-Five suites, all runnable locally.
+`tests/geos_corpus.rs` ports the GEOS unit suite and its C API companion: 23 cases
+carrying GEOS's own WKT and its published centres and radii. All 23 pass.
 
-`tests/geos_corpus.rs` ports the GEOS unit suite: 23 cases with GEOS's own WKT and
-expected centres and radii.
+`tests/geos_parity.rs` cross-checks 10 cases against a live GEOS, asserting fit,
+non-domination, and agreement.
 
-`tests/geos_parity.rs` cross-checks 10 cases against a live GEOS through the C API,
-asserting fit, non-domination and agreement.
+`tests/corpus_invariants.rs` checks two properties. The radius must equal the
+measured clearance at the reported centre, and no dense sample inside the region
+may clear more than the returned circle. Its oracle shares no code with either
+solver.
 
-`tests/corpus_invariants.rs` checks fit, meaning the reported radius equals the
-measured clearance at the reported centre, and reach, meaning no dense sample
-inside the region clears more than the returned circle. Its oracle shares no code
-with either solver.
-
-`tests/scaling.rs` guards the complexity class: it fits the growth exponent over
-doubling input sizes and fails if it reaches quadratic.
+`tests/scaling.rs` fits the growth exponent over doubling input sizes and fails if
+it reaches quadratic.
 
 `tests/simd_equivalence.rs` pins the four-lane distance batch to the scalar result.
 
-`examples/stress_parity.rs` runs the wide randomised sweep:
+The workflow in `.github/workflows/ci.yml` runs the suite on every push and pull
+request. It runs four feature sets, the 1.88 MSRV check, and a clippy, fmt, and
+rustdoc job.
+
+`examples/stress_parity.rs` runs the wide randomised sweep against GEOS:
 
 | Sweep | Cases | Failures | Worst relative gap |
 |-------|------:|---------:|-------------------:|
@@ -111,17 +95,17 @@ doubling input sizes and fails if it reaches quadratic.
 
 A failure means the native radius was materially below GEOS's.
 
-### Degenerate input
-
-Obstacles that enclose no area, such as a single point or a set of collinear
-points, have no empty circle. GEOS answers that case with a zero-radius circle
-placed on the obstacle, and this crate matches it rather than returning an error.
+Three ported cases assert at least GEOS's radius rather than equality. GEOS's
+published expectations for polygon obstacles are not optimal, because its cell
+grid settles on a ridge before the true maximum. On 60 randomised polygon cases
+the crate is better 17 times, equal 43, worse 0.
 
 ## Performance
 
-Measured against GEOS 3.14.1 through its C API, on the same obstacles, the same
-region and the same tolerance. Only the solve is timed. Every row reports the
-radius both sides returned, so a speed claim is only made where the answers agree.
+The benchmark runs 14 cases against GEOS 3.14.1 through its C API. Only the solve
+is timed, because the GEOS geometry is parsed before the clock starts. Both sides
+get the same obstacles, region, and tolerance. Ratio is GEOS divided by native.
+Both sides run serially, so the table measures the solver and not the threading.
 
 | Case | Path | Primitives | native | GEOS | Ratio |
 |------|------|-----------:|-------:|-----:|------:|
@@ -140,51 +124,41 @@ radius both sides returned, so a speed claim is only made where the answers agre
 | segments/256 | grid | 256 | 15.4 ms | 39.2 ms | 2.6x |
 | confined/points64 | exact | 64 | 302 us | 305 us | 1.0x |
 
-**Total 5.16x, median 6.98x, 14 of 14 cases faster, no case materially worse
-than GEOS.**
+| Measure | Value |
+|---------|------:|
+| total, 14 cases | 5.04x |
+| cases native solves faster | 14 of 14 |
+| cases native radius materially worse | 0 |
 
-The point-heavy rows are flattered: GEOS pays a large fixed cost in its
-branch-and-bound, so its 37 ms for 8 sites is mostly overhead. The honest reading
-of the headline is the 1.8x to 13x band on realistic work.
+The ratio varies by case. Across the 14:
 
-### Scaling
+| Per-case ratio | Value |
+|----------------|------:|
+| p10 | 1.79x |
+| median | 7.73x |
+| p90 | 309x |
 
-`cargo run --release --example scaling` sweeps the input size and fits `t = c *
-n^k`. A linear solver shows `k` near 1; an accidental quadratic path shows near 2.
+The point-heavy rows are flattered, because GEOS pays a large fixed cost in its
+branch-and-bound: its 37 ms for 8 sites is mostly overhead. The band on realistic
+work is 1.8x to 13x.
 
-| Sweep | Range | Growth exponent |
-|-------|-------|----------------:|
+Growth stays linear, fitted as `t = c * n^k`:
+
+| Sweep | Range | Exponent |
+|-------|-------|---------:|
 | Point obstacles | 10 to 100k | k = 1.05 |
 | Segment obstacles | 10 to 10k | k = 0.20 |
 
 Segment time is dominated by the recovery polish, which is bounded by the region
-rather than by the obstacle count, so it is flat until the index cost takes over.
-`tests/scaling.rs` asserts both exponents stay under the subquadratic bound, so a
-complexity regression fails CI instead of being discovered later.
+rather than the obstacle count, so it is flat until the index cost takes over.
 
-Regenerate with:
+The two solvers agree on the answer. Across the 14 cases the largest radius gap is
+8.6e-8 relative, and across the 700 randomised cases it is 1.3e-5.
 
-```
-GEOS_LIB_DIR=D:\Miniconda\Library\lib \
-  cargo run --release --features bench-geos --example compare_geos
-```
-
-The build needs the GEOS C library. `build.rs` finds it through `GEOS_LIB_DIR`,
-or through `geos-config` on `PATH`.
-
-## Conformance with GEOS
-
-`tests/geos_corpus.rs` ports the GEOS unit suite and its C API companion: 23 cases
-carrying the same WKT and the same expected centres and radii that GEOS publishes.
-All 23 pass.
-
-Three of those cases are reported differently, deliberately. GEOS's published
-expectations for polygon obstacles are not optimal, because its cell grid settles
-on a ridge and stops before reaching the true maximum. The crate returns a larger,
-measured-clearance circle there, so the ported cases assert "at least GEOS's
-radius" and additionally verify the returned radius against a brute-force distance
-function. On 60 randomised polygon cases the crate never loses to GEOS: 17 better,
-43 equal, 0 worse.
+Regenerate with
+`cargo run --release --features bench-geos --example compare_geos`. The build
+needs the GEOS C library. `build.rs` reads `GEOS_LIB_DIR`, or falls back to
+`geos-config` on `PATH`.
 
 ## Integration with the geo ecosystem
 
@@ -201,8 +175,8 @@ rejected with an error naming the reason rather than panicking.
 
 ## Python bindings
 
-The `python` feature builds the extension module `max_empty_circle`. Build it
-with maturin, or with `cargo build --features python,extension-module`.
+The `python` feature builds the extension module `max_empty_circle`. Build it with
+maturin, or with `cargo build --features python,extension-module`.
 
 | Function | Signature |
 |----------|-----------|
@@ -226,13 +200,13 @@ tunable field yet. It exists so the ABI has a stable options pointer.
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `bench-geos` | Comparison only: links the GEOS C library so benchmarks and the parity suite can cross-check the native solver. Never compiled into the solve path. | no |
-| `simd` | Four-lane `wide` batch for the climb probes, with an equivalence test against the scalar path. | no |
 | `geo-traits` | Generic solves over any `geo_traits` geometry | no |
-| `shewchuk` | Exact `orient2d` predicates from `robust` in the containment test | no |
+| `simd` | Four-lane `wide` batch for the climb probes | no |
+| `shewchuk` | Exact `orient2d` predicates from `robust` in containment | no |
 | `hotpath` | `hotpath::measure` instrumentation on the solver entry points | no |
 | `python` | PyO3 extension module named `max_empty_circle` | no |
 | `extension-module` | Build the Python module as an importable extension | no |
+| `bench-geos` | Comparison only: links the GEOS C library for benchmarks and parity tests | no |
 
 ## License
 
