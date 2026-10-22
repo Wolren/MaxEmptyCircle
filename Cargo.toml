@@ -1,0 +1,54 @@
+[package]
+name = "max-empty-circle"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Finds the largest circle that fits between obstacles, using an exact Voronoi-vertex path for points and a branch-and-bound grid over a BVH for segments and polygons."
+repository = "https://github.com/Wolren/MaxEmptyCircle"
+documentation = "https://docs.rs/max-empty-circle"
+readme = "README.md"
+keywords = ["gis", "geospatial", "geometry", "voronoi", "empty-circle"]
+categories = ["science::geo", "algorithms", "mathematics"]
+exclude = [".github"]
+
+[package.metadata.docs.rs]
+features = ["geo-traits"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "max_empty_circle"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+geo = "0.33.1"
+geo-types = "0.7.19"
+thiserror = "2"
+rayon = "1.12"
+libc = "0.2"
+pyo3 = { version = "0.29", optional = true }
+geo-traits = { version = "0.3", optional = true }
+geos = { version = "11.1.1", features = ["v3_9_0"], optional = true }
+hotpath = { version = "0.27", optional = true }
+robust = { version = "1.2.0", optional = true }
+
+[features]
+default = []
+# Comparison only: links the GEOS C library so benchmarks can cross-check the
+# native solvers. Never compiled into the solve pipeline.
+bench-geos = ["dep:geos"]
+python = ["dep:pyo3"]
+extension-module = ["pyo3/extension-module"]
+geo-traits = ["dep:geo-traits"]
+# Exact orient2d predicates from `robust` in the containment test.
+shewchuk = ["dep:robust"]
+hotpath = ["dep:hotpath"]
+
+[dev-dependencies]
+serde_json = "1.0.154"
+wkt = { version = "0.14", features = ["geo-types"] }
+
+[[example]]
+name = "compare_geos"
+required-features = ["bench-geos"]
