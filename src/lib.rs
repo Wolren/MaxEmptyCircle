@@ -278,10 +278,16 @@ mod tests {
 
     #[test]
     fn mec_two_sites_needs_a_boundary_to_be_bounded() {
-        // Collinear obstacles enclose no area, so the free problem is unbounded
-        // and the solve refuses rather than inventing a region.
+        // Collinear obstacles enclose no area, so the free problem has no empty
+        // circle: GEOS reports radius zero with the centre on the obstacle, and
+        // the crate matches that rather than failing.
         let g = sites(&[(0.0, 0.0), (10.0, 0.0)]);
-        assert!(largest_empty_circle(&g, None, &MecOptions::default()).is_err());
+        let degenerate = largest_empty_circle(&g, None, &MecOptions::default()).expect("solve");
+        assert!(
+            degenerate.radius <= 1e-9,
+            "collinear obstacles should give radius zero, got {}",
+            degenerate.radius
+        );
 
         // With a boundary the midpoint of the pair is the answer.
         let b = Geometry::Polygon(Polygon::new(
@@ -361,7 +367,7 @@ mod tests {
 
     #[test]
     fn mec_polygon_obstacle_uses_grid() {
-        // A single areal obstacle has no point sites, so the grid path answers.
+        // A filled square blocks its interior, so the centre lands outside it.
         let g = Geometry::Polygon(Polygon::new(
             LineString::from(vec![
                 (0.0, 0.0),

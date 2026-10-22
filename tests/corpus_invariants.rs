@@ -279,12 +279,18 @@ fn nan_obstacle_is_rejected() {
 }
 
 #[test]
-fn single_site_has_no_empty_circle() {
-    // One site cannot bound a circle: with nothing to avoid, the radius is
-    // unbounded, so the solve must refuse rather than invent one.
+fn single_site_gives_zero_radius() {
+    // One site encloses no area, so no empty circle exists. GEOS answers that case
+    // with radius zero centred on the site, and the crate matches it.
     let g = sites_geom(&[(5.0, 5.0)]);
-    let out = largest_empty_circle(&g, None, &MecOptions::default());
-    assert!(out.is_err(), "a single site has no finite empty circle");
+    let r = largest_empty_circle(&g, None, &MecOptions::default()).expect("degenerate solve");
+    assert!(
+        r.radius <= 1e-9,
+        "a single site should give radius zero, got {}",
+        r.radius
+    );
+    assert!((r.center.x() - 5.0).abs() < 1e-9);
+    assert!((r.center.y() - 5.0).abs() < 1e-9);
 }
 
 #[test]

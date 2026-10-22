@@ -102,6 +102,20 @@ pub struct Region {
 }
 
 impl Region {
+    /// Region for input that encloses no area.
+    ///
+    /// Collapses to the first obstacle coordinate, which is where GEOS places the
+    /// centre of its zero-radius answer, so the only admissible centre is that point.
+    fn collapsed(set: &ObstacleSet) -> Self {
+        let first = set.vertices().first().copied().unwrap_or([0.0, 0.0]);
+        // Bounds collapse onto the point too, so the grid detects the degenerate
+        // case by span rather than searching a box with no interior.
+        Region {
+            rings: vec![Ring::new(vec![first, first])],
+            bounds: (first[0], first[1], first[0], first[1]),
+        }
+    }
+
     /// Number of rings in the region.
     pub fn ring_count(&self) -> usize {
         self.rings.len()
@@ -123,12 +137,11 @@ impl Region {
             });
         }
 
+        // A hull enclosing no area gives a degenerate region, and GEOS answers
+        // that case with a zero-radius circle on the obstacles rather than failing.
         let vertices = set.vertices();
         if vertices.len() < 3 {
-            return Err(MecError::InvalidInput(
-                "obstacles enclose no area: pass a polygonal boundary so the empty circle is bounded"
-                    .to_string(),
-            ));
+            return Ok(Self::collapsed(set));
         }
 
         let hull = MultiPoint::new(
@@ -143,10 +156,7 @@ impl Region {
         // A collinear hull comes back as a degenerate ring with no area, which
         // confines nothing, so the same rejection applies.
         if ring.len() < 4 || signed_area(&ring).abs() <= 1e-12 {
-            return Err(MecError::InvalidInput(
-                "obstacles are collinear: pass a polygonal boundary so the empty circle is bounded"
-                    .to_string(),
-            ));
+            return Ok(Self::collapsed(set));
         }
 
         let bounds = set

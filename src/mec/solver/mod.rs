@@ -4,3 +4,5 @@
 pub mod bench_geos;
 pub mod exact;
 pub mod grid;
+#[cfg(feature = "simd")]
+pub mod simd_probe;

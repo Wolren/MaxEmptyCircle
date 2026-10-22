@@ -94,18 +94,19 @@ pub fn solve_grid(
     let cell_size = width.max(height);
 
     if cell_size <= 0.0 || !tolerance.is_finite() || tolerance <= 0.0 {
-        let (cx, cy) = centroid_of(set)?;
-        if region.contains_closed(cx, cy) {
-            let r_sq = set.clearance_sq(cx, cy);
-            if r_sq.is_finite() && r_sq > 0.0 {
-                return Some(GridSolution {
-                    x: cx,
-                    y: cy,
-                    radius_sq: r_sq,
-                    iterations: 0,
-                    exhausted_budget: false,
-                });
-            }
+        // A collapsed region holds a single admissible point, so the answer is
+        // whatever the clearance is there. That is zero for obstacles enclosing no
+        // area, which is the answer GEOS reports rather than an error.
+        let (cx, cy) = collapsed_center(set, region)?;
+        let r_sq = set.clearance_sq(cx, cy);
+        if r_sq.is_finite() {
+            return Some(GridSolution {
+                x: cx,
+                y: cy,
+                radius_sq: r_sq.max(0.0),
+                iterations: 0,
+                exhausted_budget: false,
+            });
         }
         return None;
     }
@@ -256,7 +257,21 @@ pub fn solve_grid(
         best = polish_global(nb, region, best);
     }
 
+    // A collapsed region confines the centre to the obstacles themselves, where
+    // the only valid answer is radius zero.
     if !region.contains_closed(best.0, best.1) {
+        if let Some((cx, cy)) = centroid_of(set) {
+            let r_sq = set.clearance_sq(cx, cy);
+            if r_sq.is_finite() {
+                return Some(GridSolution {
+                    x: cx,
+                    y: cy,
+                    radius_sq: r_sq.max(0.0),
+                    iterations,
+                    exhausted_budget,
+                });
+            }
+        }
         return None;
     }
 
@@ -275,6 +290,7 @@ pub fn solve_grid(
 }
 
 #[inline]
+/// Clearance at a point: distance to the nearest obstacle edge.
 fn nearest_distance(nb: &NearestObstacleIndex, x: f64, y: f64) -> f64 {
     match nb.nearest_distance_sq(x, y) {
         Some((d, _)) if d.is_finite() && d > 0.0 => d.sqrt(),
@@ -310,8 +326,12 @@ fn polish(
 
     let max_step = initial_step * 64.0;
     let mut step = initial_step;
+    // Rounds are capped, and the walk also stops once it stops improving, so a
+    // flat basin does not pay for the whole budget. The cap only bounds a case
+    // whose step keeps growing without converging.
+    let mut stagnant = 0u32;
 
-    for _ in 0..2048 {
+    for _ in 0..tuning::MEC_CLIMB_ROUNDS {
         if step <= tol || !step.is_finite() {
             break;
         }
@@ -350,8 +370,13 @@ fn polish(
         }
         if moved {
             step = (step * 1.5).min(max_step);
+            stagnant = 0;
         } else {
             step *= 0.5;
+            stagnant += 1;
+            if stagnant >= tuning::MEC_CLIMB_STAGNANT_ROUNDS {
+                break;
+            }
         }
     }
     (bx, by, bd)
@@ -446,4 +471,16 @@ fn centroid_of(set: &ObstacleSet) -> Option<(f64, f64)> {
         n += 1;
     }
     (n > 0).then(|| (sx / n as f64, sy / n as f64))
+}
+
+/// Single admissible point of a collapsed region.
+///
+/// A degenerate region holds one point, so the answer there is the obstacle
+/// coordinate GEOS also reports, not a search result.
+fn collapsed_center(set: &ObstacleSet, region: &Region) -> Option<(f64, f64)> {
+    let ring = region.ring_coords(0);
+    if let Some(p) = ring.first() {
+        return Some((p[0], p[1]));
+    }
+    centroid_of(set)
 }

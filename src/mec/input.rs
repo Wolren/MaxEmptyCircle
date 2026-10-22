@@ -98,6 +98,76 @@ impl SegmentIndex {
     }
 }
 
+/// One areal obstacle: an exterior ring and its holes.
+///
+/// An areal obstacle blocks its interior, not only its edges. GEOS measures the
+/// clearance as its distance to the obstacle geometry, which is zero for a point
+/// inside a polygon, so a circle centred there is empty of nothing.
+#[derive(Debug, Clone, Default)]
+pub struct ArealObstacle {
+    /// Outer ring in input order.
+    pub exterior: Vec<[f64; 2]>,
+    /// Rings cut out of the exterior.
+    pub holes: Vec<Vec<[f64; 2]>>,
+    /// Bounding box as (min_x, min_y, max_x, max_y), for the prefilter.
+    pub bbox: (f64, f64, f64, f64),
+}
+
+impl ArealObstacle {
+    /// Build from an exterior ring and its holes.
+    pub fn new(exterior: Vec<[f64; 2]>, holes: Vec<Vec<[f64; 2]>>) -> Self {
+        let mut bbox = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for p in &exterior {
+            bbox.0 = bbox.0.min(p[0]);
+            bbox.1 = bbox.1.min(p[1]);
+            bbox.2 = bbox.2.max(p[0]);
+            bbox.3 = bbox.3.max(p[1]);
+        }
+        Self {
+            exterior,
+            holes,
+            bbox,
+        }
+    }
+
+    /// True when (x, y) lies inside the obstacle, boundary included.
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        if x < self.bbox.0 || x > self.bbox.2 || y < self.bbox.1 || y > self.bbox.3 {
+            return false;
+        }
+        if !point_in_ring(x, y, &self.exterior) {
+            return false;
+        }
+        for h in &self.holes {
+            if point_in_ring(x, y, h) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Even-odd ray cast against a closed ring.
+fn point_in_ring(x: f64, y: f64, ring: &[[f64; 2]]) -> bool {
+    let mut inside = false;
+    for w in ring.windows(2) {
+        let (ax, ay) = (w[0][0], w[0][1]);
+        let (bx, by) = (w[1][0], w[1][1]);
+        if (ay > y) != (by > y) {
+            let cut = ax + (y - ay) * (bx - ax) / (by - ay);
+            if x < cut {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
 /// Every obstacle primitive, flattened once per solve.
 #[derive(Debug, Clone, Default)]
 pub struct ObstacleSet {
@@ -110,6 +180,8 @@ pub struct ObstacleSet {
     /// True when `segments` covers a closed area, so the region between its
     /// edges is unreachable without crossing an obstacle.
     pub has_areal_obstacle: bool,
+    /// Filled obstacles. Their interiors score zero clearance.
+    pub areal: Vec<ArealObstacle>,
 }
 
 impl ObstacleSet {
@@ -151,14 +223,8 @@ impl ObstacleSet {
                     self.push_polygon(p, owner)?;
                 }
             }
-            Geometry::Rect(r) => {
-                let poly = r.to_polygon();
-                self.push_line_string(poly.exterior(), owner)?;
-            }
-            Geometry::Triangle(t) => {
-                let poly = t.to_polygon();
-                self.push_line_string(poly.exterior(), owner)?;
-            }
+            Geometry::Rect(r) => self.push_polygon(&r.to_polygon(), owner)?,
+            Geometry::Triangle(t) => self.push_polygon(&t.to_polygon(), owner)?,
             Geometry::GeometryCollection(gc) => {
                 for g in &gc.0 {
                     self.push_geometry(g, owner)?;
@@ -181,9 +247,14 @@ impl ObstacleSet {
     }
 
     fn push_line_string(&mut self, ls: &LineString<f64>, owner: usize) -> Result<(), MecError> {
+        // An empty member adds no obstacle. GEOS ignores empties rather than
+        // rejecting the whole input, and a collection may carry them.
+        if ls.0.is_empty() {
+            return Ok(());
+        }
         if ls.0.len() < 2 {
             return Err(MecError::InvalidInput(
-                "obstacle line string has fewer than 2 coordinates".to_string(),
+                "obstacle line string has a single coordinate".to_string(),
             ));
         }
         for w in ls.0.windows(2) {
@@ -199,6 +270,13 @@ impl ObstacleSet {
         for hole in poly.interiors() {
             self.push_line_string(hole, owner)?;
         }
+        let exterior: Vec<[f64; 2]> = poly.exterior().0.iter().map(|c| [c.x, c.y]).collect();
+        let holes: Vec<Vec<[f64; 2]>> = poly
+            .interiors()
+            .iter()
+            .map(|h| h.0.iter().map(|c| [c.x, c.y]).collect())
+            .collect();
+        self.areal.push(ArealObstacle::new(exterior, holes));
         Ok(())
     }
 
@@ -253,6 +331,10 @@ impl ObstacleSet {
     }
 
     /// Smallest squared distance from (x, y) to any obstacle primitive.
+    ///
+    /// A polygon contributes its edges, not its interior. GEOS measures obstacles
+    /// with `IndexedFacetDistance`, so a centre inside a polygon is legal and its
+    /// clearance is the distance to the nearest edge.
     #[inline]
     pub fn clearance_sq(&self, x: f64, y: f64) -> f64 {
         let mut best = f64::INFINITY;
