@@ -35,18 +35,35 @@
 //!
 //! # Solve pipeline
 //!
-//! [`MecResult::approach`] reports which path produced the answer:
+//! [`MecResult::approach`] reports which path produced the answer.
 //!
-//! 1. **Exact Voronoi** when every obstacle is a point. The centre of the
-//!    largest empty circle among point sites is a Voronoi vertex, so the answer
-//!    is found by enumerating circumcentres and re-measuring each against every
-//!    site. This is exact, not approximated.
-//! 2. **Grid search** for segments and polygons. A branch and bound over the
-//!    search box, driven by the 1-Lipschitz property of obstacle distance, with
-//!    a compass hill climb when the cell budget runs out.
+//! **Exact Voronoi** when every obstacle is a point, up to
+//! [`tuning::MEC_EXACT_MAX_SITES`] sites. The maximum of a minimum of distances
+//! over a closed region is attained at a Voronoi vertex, which is a Delaunay
+//! circumcentre, or on the region boundary. One triangulation enumerates the
+//! interior candidates in `O(n log n)`. The boundary family adds ring corners,
+//! bisector-edge crossings solved from the equidistance condition, and a
+//! per-edge refine within one sample spacing. Each candidate is re-measured
+//! against every site, so a circumcentre with a fourth site inside its circle
+//! scores lower and loses.
+//!
+//! **Grid search** for segments and polygons, and for point sets above the site
+//! cap. A branch and bound over the region, driven by the 1-Lipschitz property of
+//! obstacle distance: no point in a cell of half-size `h` clears an obstacle by
+//! more than `d(c) + h*sqrt(2)`. Region membership is a filter, not part of the
+//! bound, so a cell outside the region still holds the boundary optima. A
+//! polygon contributes its edges rather than its interior. When the work cap
+//! trips, a rescan climbs from one representative per basin.
 //!
 //! The radius a result reports is always the measured distance from its centre
 //! to the nearest obstacle, so a returned circle is empty by construction.
+//!
+//! # Degenerate input
+//!
+//! Obstacles that enclose no area, such as a single point or a set of collinear
+//! points, admit no empty circle. The result is a zero-radius circle centred on
+//! an obstacle, which is what GEOS `LargestEmptyCircle` returns for the same
+//! input.
 //!
 //! # Entry points
 //!
@@ -61,6 +78,7 @@
 //! |---------|--------|
 //! | `bench-geos` | comparison only: links the GEOS C library so benchmarks can compare solvers |
 //! | `geo-traits` | generic solves over any `geo_traits` geometry |
+//! | `simd` | four-lane `wide` batch for the climb probes |
 //! | `shewchuk` | exact `orient2d` predicates from the `robust` crate in the containment test |
 //! | `hotpath` | `#[hotpath::measure]` instrumentation on the solver entry points |
 //! | `python` | PyO3 extension module named `max_empty_circle` |
