@@ -8,9 +8,11 @@ pub const MEC_GRID_SIDE: usize = 25;
 /// The walk also stops once it stops improving, so this only bounds a run whose
 /// step keeps growing. A tight bound keeps a flat basin from paying for the whole
 /// budget: the cost of one round is 32 distance queries.
-pub const MEC_CLIMB_ROUNDS: usize = 256;
+pub const MEC_CLIMB_ROUNDS: usize = 1024;
+/// Rounds of the shrink-only descent that refines the recovered peak.
+pub const MEC_DESCENT_ROUNDS: usize = 512;
 /// Consecutive rounds without improvement before the climb gives up.
-pub const MEC_CLIMB_STAGNANT_ROUNDS: u32 = 12;
+pub const MEC_CLIMB_STAGNANT_ROUNDS: u32 = 64;
 /// Grid cells popped before the work cap trips.
 /// The cap only bounds a search that cannot converge on its bound. The recovery
 /// polish supplies the accuracy, so a low cap costs nothing in correctness and

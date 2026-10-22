@@ -374,3 +374,65 @@ pub fn geos_circle_to_result(c: GeosCircle) -> MecResult {
         approach: crate::MecApproach::Geos,
     }
 }
+
+/// A GEOS context with the obstacle geometry already parsed.
+///
+/// Build once, then time [`PreparedGeos::solve`] alone. The plain
+/// [`solve_geos_with_tolerance`] builds the WKT string and parses it inside its
+/// own call, which makes a repeated timing measure parsing rather than solving.
+pub struct PreparedGeos {
+    context: OwnedContext,
+    obstacles: OwnedGeom,
+    boundary: Option<OwnedGeom>,
+}
+
+// The GEOS context handle is owned by this struct and never shared, so moving the
+// prepared pair to another thread moves the only reference to it.
+unsafe impl Send for PreparedGeos {}
+
+impl PreparedGeos {
+    /// Build the GEOS geometry for an obstacle set and optional boundary.
+    pub fn new(set: &ObstacleSet, boundary: Option<&Geometry<f64>>) -> Result<Self, MecError> {
+        let context = OwnedContext::new()?;
+        let h = context.get();
+        let obstacles = parse_wkt(h, &obstacles_to_wkt(set)?)?;
+        let boundary = match boundary {
+            Some(b) => Some(parse_wkt(h, &to_wkt(b))?),
+            None => None,
+        };
+        Ok(Self {
+            context,
+            obstacles,
+            boundary,
+        })
+    }
+
+    /// Solve at an explicit tolerance, with no setup inside the call.
+    ///
+    /// `set` supplies the measured radius, so both solvers report on one basis.
+    pub fn solve(&self, set: &ObstacleSet, tolerance: f64) -> Result<GeosCircle, MecError> {
+        let h = self.context.get();
+        let boundary_ptr = self
+            .boundary
+            .as_ref()
+            .map(|g| g.ptr as *const GEOSGeometry)
+            .unwrap_or(ptr::null());
+
+        let line =
+            unsafe { GEOSLargestEmptyCircle_r(h, self.obstacles.ptr, boundary_ptr, tolerance) };
+        if line.is_null() {
+            return Err(MecError::GeosFailed(
+                "GEOSLargestEmptyCircle_r returned null".to_string(),
+            ));
+        }
+        let line = OwnedGeom {
+            ptr: line,
+            handle: h,
+        };
+
+        let (x, y) = first_coord(h, line.ptr)
+            .ok_or_else(|| MecError::GeosFailed("could not read GEOS circle centre".to_string()))?;
+        let radius = set.clearance_sq(x, y).max(0.0).sqrt();
+        Ok(GeosCircle { x, y, radius })
+    }
+}

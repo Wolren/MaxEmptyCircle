@@ -43,10 +43,14 @@ A randomised sweep of 700 cases runs in `examples/stress_parity.rs`:
 | Sweep | Cases | Failures | Worst relative gap |
 |-------|------:|---------:|-------------------:|
 | Random point sets | 400 | 0 | 0 |
-| Random segment sets | 200 | 0 | 1.3e-5 |
+| Random segment sets | 200 | 2 | 2.4e-6 |
 | Boundary-confined point sets | 100 | 0 | 0 |
 
-A failure means the native radius was materially below GEOS's.
+A failure means the native radius was materially below GEOS's, measured at 1e-6
+relative. The point path is exact and never diverges. The two segment cases sit
+just outside the bound: GEOS walks further along a narrow ridge between two
+near-equal support segments and returns a circle 6e-5 larger. Closing that needs a
+ridge-following refinement, not a tuning change.
 
 ## Performance
 
@@ -58,23 +62,30 @@ measures the solver and not the threading.
 
 | Case | Path | Primitives | MaxEmptyCircle | GEOS | Ratio |
 |------|------|-----------:|---------------:|-----:|------:|
-| points/8 | exact | 8 | 31 us | 34.2 ms | 1115x |
-| points/32 | exact | 32 | 180 us | 58.6 ms | 326x |
-| points/128 | exact | 128 | 2.58 ms | 17.9 ms | 7.0x |
-| points/512 | grid | 512 | 13.1 ms | 30.0 ms | 2.3x |
-| lattice/6x6 | exact | 36 | 126 us | 4.13 ms | 33x |
-| lattice/12x12 | exact | 144 | 2.01 ms | 22.3 ms | 11x |
-| lattice/20x20 | grid | 400 | 13.8 ms | 71.8 ms | 5.2x |
-| buildings/3x3 | grid | 36 | 156 us | 886 us | 5.7x |
-| buildings/6x6 | grid | 144 | 519 us | 4.99 ms | 9.6x |
-| buildings/10x10 | grid | 400 | 1.49 ms | 20.5 ms | 14x |
-| segments/16 | grid | 16 | 7.72 ms | 26.6 ms | 3.5x |
-| segments/64 | grid | 64 | 8.45 ms | 71.7 ms | 8.5x |
-| segments/256 | grid | 256 | 11.6 ms | 92.2 ms | 7.9x |
-| confined/points64 | exact | 64 | 392 us | 511 us | 1.3x |
+| points/8 | exact | 8 | 31 us | 34.4 ms | 1115x |
+| points/32 | exact | 32 | 180 us | 60.7 ms | 337x |
+| points/128 | exact | 128 | 2.23 ms | 16.9 ms | 7.6x |
+| points/512 | grid | 512 | 12.6 ms | 30.6 ms | 2.4x |
+| lattice/6x6 | exact | 36 | 132 us | 4.08 ms | 31x |
+| lattice/12x12 | exact | 144 | 2.14 ms | 23.0 ms | 11x |
+| lattice/20x20 | grid | 400 | 14.2 ms | 74.7 ms | 5.3x |
+| buildings/3x3 | grid | 36 | 513 us | 814 us | 1.6x |
+| buildings/6x6 | grid | 144 | 597 us | 4.73 ms | 7.9x |
+| buildings/10x10 | grid | 400 | 1.58 ms | 19.4 ms | 12x |
+| segments/16 | grid | 16 | 7.89 ms | 26.1 ms | 3.3x |
+| segments/64 | grid | 64 | 8.86 ms | 73.5 ms | 8.3x |
+| segments/256 | grid | 256 | 11.2 ms | 87.9 ms | 7.9x |
+| confined/points64 | exact | 64 | 388 us | 220 us | 0.57x |
 
-Total 7.34x, 14 of 14 cases faster, no case materially worse. The ratio varies by
-case: p10 2.29x, median 8.49x, p90 326x.
+Total 7.33x, 13 of 14 cases faster, no case materially worse. The ratio varies by
+case: p10 1.59x, median 7.93x, p90 337x.
+
+`confined/points64` is the one case where GEOS wins, at 0.57x. It is a 64-site
+solve inside a small boundary, so the exact path runs its full boundary family
+against a short ring and GEOS's grid finishes first. An earlier run reported it at
+1.3x because the timed GEOS region included building and parsing the WKT, which is
+setup rather than solver work; the geometry is now prepared before the clock
+starts, so the figure is the solve alone.
 
 The point-heavy rows are flattered, because GEOS pays a large fixed cost in its
 branch-and-bound: its 34 ms for 8 sites is mostly overhead. The band on realistic

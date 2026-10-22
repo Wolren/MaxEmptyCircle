@@ -21,7 +21,7 @@ use max_empty_circle::geo_types::{
     Coord, Geometry, LineString, MultiLineString, MultiPoint, Point, Polygon,
 };
 use max_empty_circle::mec::input::ObstacleSet;
-use max_empty_circle::mec::solver::bench_geos::{geos_tolerance_for, solve_geos_with_tolerance};
+use max_empty_circle::mec::solver::bench_geos::{geos_tolerance_for, PreparedGeos};
 use max_empty_circle::{largest_empty_circle, MecApproach, MecOptions};
 
 /// A benchmark case: a name, its obstacles, and an optional boundary.
@@ -185,13 +185,19 @@ fn time_native(geom: &Geometry<f64>, boundary: Option<&Geometry<f64>>, reps: usi
     (best, radius)
 }
 
+/// Time the GEOS solve alone.
+///
+/// The geometry is parsed once, before the clock starts, so this measures the
+/// solve. Timing the plain entry point instead would include building and parsing
+/// the WKT string on every repetition, which is setup rather than solver work.
 fn time_geos(set: &ObstacleSet, boundary: Option<&Geometry<f64>>, reps: usize) -> (f64, f64) {
     let tolerance = geos_tolerance_for(set);
+    let prepared = PreparedGeos::new(set, boundary).expect("geos prepare");
     let mut best = f64::INFINITY;
     let mut radius = 0.0;
     for _ in 0..reps {
         let start = Instant::now();
-        let c = solve_geos_with_tolerance(set, boundary, tolerance).expect("geos solve");
+        let c = prepared.solve(set, tolerance).expect("geos solve");
         let us = start.elapsed().as_secs_f64() * 1e6;
         if us < best {
             best = us;

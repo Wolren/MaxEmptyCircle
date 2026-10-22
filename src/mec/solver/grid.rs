@@ -247,7 +247,7 @@ pub fn solve_grid(
     // The cheap climb always runs: it costs a few dozen probes and fixes the
     // local miss at no measurable price.
     let mut best = (best_x, best_y, best_dist);
-    best = polish(nb, region, best, tolerance * 1e-4, h_size * 0.5);
+    best = polish(nb, region, best, tolerance * 1e-9, h_size * 0.5);
 
     // The global rescan is the expensive recovery, so it only runs when the
     // search stopped on the budget. A search that converged on its own bound is
@@ -255,6 +255,10 @@ pub fn solve_grid(
     // distance queries to a case that took a handful.
     if exhausted_budget {
         best = polish_global(nb, region, best);
+        // The recovery walk grows its step to cross plateaus, so it can stop a
+        // fraction short of the ridge crest. Shrink-only refinement from the best
+        // point closes that last gap.
+        best = polish_descent(nb, region, best, tolerance * 1e-3, h_size * 0.25);
     }
 
     // A collapsed region confines the centre to the obstacles themselves, where
@@ -329,7 +333,6 @@ fn polish(
     // Rounds are capped, and the walk also stops once it stops improving, so a
     // flat basin does not pay for the whole budget. The cap only bounds a case
     // whose step keeps growing without converging.
-    let mut stagnant = 0u32;
 
     for _ in 0..tuning::MEC_CLIMB_ROUNDS {
         if step <= tol || !step.is_finite() {
@@ -370,13 +373,12 @@ fn polish(
         }
         if moved {
             step = (step * 1.5).min(max_step);
-            stagnant = 0;
         } else {
+            // Halve and keep probing. Breaking out on a run of failures stops the
+            // descent while the step is still coarse, and a broad flat crest then
+            // reads as a peak: the true maximum sits a fraction of a step away and
+            // only a finer step sees the slope.
             step *= 0.5;
-            stagnant += 1;
-            if stagnant >= tuning::MEC_CLIMB_STAGNANT_ROUNDS {
-                break;
-            }
         }
     }
     (bx, by, bd)
@@ -453,6 +455,56 @@ fn polish_global(
         }
     }
     best
+}
+
+/// Pattern search that only shrinks its step.
+///
+/// The growing walk crosses plateaus, which the recovery needs, but it overshoots
+/// a narrow ridge and reports a peak a fraction short. This pass takes the best
+/// point found and refines it with a strictly shrinking step, so it converges to
+/// the local maximum rather than stepping across it.
+fn polish_descent(
+    nb: &NearestObstacleIndex,
+    region: &Region,
+    start: (f64, f64, f64),
+    tol: f64,
+    initial_step: f64,
+) -> (f64, f64, f64) {
+    let dirs: [(f64, f64); 32] = std::array::from_fn(|k| {
+        let a = std::f64::consts::TAU * k as f64 / 32.0;
+        (a.cos(), a.sin())
+    });
+
+    let (mut bx, mut by, mut bd) = start;
+    if !region.contains_closed(bx, by) {
+        return start;
+    }
+    let mut step = initial_step;
+
+    for _ in 0..tuning::MEC_DESCENT_ROUNDS {
+        if step <= tol || !step.is_finite() {
+            break;
+        }
+        let mut moved = false;
+        for (dx, dy) in dirs {
+            let nx = bx + dx * step;
+            let ny = by + dy * step;
+            if !region.contains_closed(nx, ny) {
+                continue;
+            }
+            let d = nearest_distance(nb, nx, ny);
+            if d > bd {
+                bx = nx;
+                by = ny;
+                bd = d;
+                moved = true;
+            }
+        }
+        if !moved {
+            step *= 0.5;
+        }
+    }
+    (bx, by, bd)
 }
 
 /// Centroid of the obstacle set: the mean of every point and segment midpoint.

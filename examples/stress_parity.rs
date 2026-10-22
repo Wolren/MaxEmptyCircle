@@ -52,7 +52,13 @@ fn main() {
         };
         let (a, b, c, d) = set.bounds().unwrap();
         let diag = (c - a).hypot(d - b).max(1.0);
-        let tol = (diag * 1e-6).max(geos_tolerance_for(&set) * 10.0);
+        // Relative, so the bound means the same thing at every scale. The
+        // absolute form used to mask a 5e-5 relative gap on segments.
+        // 1e-6 relative. Two segment cases sit just outside this bound because
+        // GEOS walks further along a narrow ridge between two near-equal support
+        // segments; the gap is 6e-5 relative and is reported, not hidden.
+        let tol = nat.radius * 1e-6;
+        let _ = diag;
         let rel = (ge.radius - nat.radius) / ge.radius.max(1e-300);
         total += 1;
         if nat.radius + tol < ge.radius {
@@ -98,7 +104,8 @@ fn main() {
         };
         let (a, b, c, d) = set.bounds().unwrap();
         let diag = (c - a).hypot(d - b).max(1.0);
-        let tol = (diag * 1e-5).max(geos_tolerance_for(&set) * 10.0);
+        let tol = nat.radius * 1e-6;
+        let _ = diag;
         let rel = (ge.radius - nat.radius) / ge.radius.max(1e-300);
         total += 1;
         if nat.radius + tol < ge.radius {
