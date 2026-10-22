@@ -102,6 +102,10 @@ pub struct Region {
 }
 
 impl Region {
+    /// Number of rings in the region.
+    pub fn ring_count(&self) -> usize {
+        self.rings.len()
+    }
     /// Build the region: the caller boundary when present, else the obstacle
     /// convex hull.
     ///
@@ -160,11 +164,6 @@ impl Region {
         self.bounds
     }
 
-    /// The region rings, for a solver that walks the boundary.
-    pub(crate) fn rings(&self) -> &[Ring] {
-        &self.rings
-    }
-
     /// True when the region has any ring, so walking the boundary is meaningful.
     pub fn has_rings(&self) -> bool {
         !self.rings.is_empty()
@@ -197,6 +196,33 @@ impl Region {
         false
     }
 
+    /// Signed distance to the region boundary, negative outside.
+    ///
+    /// `clearance` is the distance to the nearest obstacle at (x, y). Inside the
+    /// region the signed value is that clearance; outside it is minus the
+    /// distance to the region boundary. Scoring outside cells negatively is what
+    /// makes the search converge: such a cell sits far from every obstacle, so
+    /// its raw clearance looks promising and the search would refine it forever.
+    /// GEOS scores its cells the same way.
+    pub fn signed_clearance(&self, clearance: f64, x: f64, y: f64) -> f64 {
+        if self.contains_closed(x, y) {
+            return clearance;
+        }
+        let mut nearest_sq = f64::INFINITY;
+        for ring in &self.rings {
+            for w in ring.coords.windows(2) {
+                let d = point_segment_distance_sq(w[0], w[1], x, y);
+                if d < nearest_sq {
+                    nearest_sq = d;
+                }
+            }
+        }
+        if nearest_sq.is_finite() {
+            -nearest_sq.sqrt()
+        } else {
+            -clearance
+        }
+    }
     #[inline]
     /// True when (x, y) lies inside the region.
     pub fn contains(&self, x: f64, y: f64) -> bool {
@@ -277,7 +303,7 @@ fn region_eps(bounds: &(f64, f64, f64, f64)) -> f64 {
     let (min_x, min_y, max_x, max_y) = *bounds;
     let span = (max_x - min_x).max(max_y - min_y);
     if span.is_finite() && span > 0.0 {
-        span * 1e-12
+        span * 1e-9
     } else {
         1e-12
     }

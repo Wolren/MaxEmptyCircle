@@ -70,6 +70,7 @@ fn approach_to(v: MecApproach) -> c_int {
     match v {
         MecApproach::ExactVoronoi => 1,
         MecApproach::GridSolver => 2,
+        MecApproach::Geos => 3,
     }
 }
 

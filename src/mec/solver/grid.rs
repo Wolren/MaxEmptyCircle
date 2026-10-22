@@ -3,16 +3,22 @@
 //! The search is a branch and bound on one invariant: the distance to the
 //! nearest obstacle is 1-Lipschitz, so for a cell of half-size `h` centred at
 //! `c`, no point of that cell can be farther from an obstacle than
-//! `obstacle_distance(c) + h * sqrt(2)`. That bound holds for every centre,
-//! which is what makes the pruning sound for cells that straddle an obstacle.
-//! A cell leaves the queue only when its bound proves it cannot beat the
-//! incumbent by more than the tolerance.
+//! `obstacle_distance(c) + h * sqrt(2)`. A cell leaves the queue only when its
+//! bound proves it cannot beat the incumbent by more than the tolerance.
 //!
-//! The empty circle differs from the inscribed circle in one way that shapes
-//! this loop. The circle centre need not be inside any polygon: the obstacles
-//! are what it must avoid, and the only region constraint is [`Region`]. So the
-//! primal asks "is this centre clear of every obstacle", and the region asks
-//! "is this centre allowed here" as a second, separate test.
+//! Two design points separate the empty circle from the inscribed circle.
+//!
+//! **Region membership is a filter, not part of the bound.** A cell outside the
+//! region can still hold an admissible point near its edge, so it stays in the
+//! queue with a valid Lipschitz bound and prunes once that bound falls behind the
+//! incumbent. Marking it hopeless up front would discard the boundary optima,
+//! which is exactly where a constrained answer often sits.
+//!
+//! **A search on a bound needs a polish.** The bound is loose on a plateau of
+//! near-optimal clearance, so the incumbent is the best *sampled* centre and can
+//! sit a percent short of the true peak. A climb from the incumbent, then a
+//! coarse rescan of the region with a climb from each strong sample, recovers it.
+//! The rescan is what stops one walk from settling in a single basin.
 use std::collections::BinaryHeap;
 
 use super::super::boundary::Region;
@@ -72,8 +78,8 @@ pub struct GridSolution {
 
 /// Solve the largest empty circle by branch and bound over the region.
 ///
-/// The radius of the returned result is measured against the obstacle set at
-/// the returned centre rather than read off the cell bound.
+/// The returned radius is measured against the obstacle set at the returned
+/// centre rather than read off a cell bound.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn solve_grid(
     set: &ObstacleSet,
@@ -88,9 +94,8 @@ pub fn solve_grid(
     let cell_size = width.max(height);
 
     if cell_size <= 0.0 || !tolerance.is_finite() || tolerance <= 0.0 {
-        // A collapsed region leaves one candidate: the obstacle centroid.
         let (cx, cy) = centroid_of(set)?;
-        if region.contains(cx, cy) {
+        if region.contains_closed(cx, cy) {
             let r_sq = set.clearance_sq(cx, cy);
             if r_sq.is_finite() && r_sq > 0.0 {
                 return Some(GridSolution {
@@ -115,21 +120,19 @@ pub fn solve_grid(
     let cells_y = ((height / step).ceil() as usize).max(1);
 
     let mut queue: BinaryHeap<GridCell> = BinaryHeap::with_capacity(cells_x * cells_y * 2);
-    let mut best_x = 0.0;
-    let mut best_y = 0.0;
-    let mut best_dist = 0.0;
-    let mut found = false;
+    let mut best_x = f64::NAN;
+    let mut best_y = f64::NAN;
+    let mut best_dist = f64::NEG_INFINITY;
 
     for i in 0..cells_x {
         let cx = min_x + h_size + i as f64 * step;
         for j in 0..cells_y {
             let cy = min_y + h_size + j as f64 * step;
             let d = nearest_distance(nb, cx, cy);
-            if region.contains(cx, cy) && d > best_dist {
+            if region.contains_closed(cx, cy) && d > best_dist {
                 best_x = cx;
                 best_y = cy;
                 best_dist = d;
-                found = true;
             }
             queue.push(GridCell {
                 x: cx,
@@ -142,22 +145,20 @@ pub fn solve_grid(
     }
 
     let mut iterations = 0usize;
-    // True when the loop stopped on the budget instead of on the bound, which
-    // means the incumbent may still be short of the peak.
     let mut exhausted_budget = false;
 
     while let Some(cell) = queue.pop() {
         iterations += 1;
 
-        if iterations > tuning::MEC_GRID_CELL_BUDGET {
-            exhausted_budget = true;
+        // Ordered by the bound, so once the best remaining cell cannot beat the
+        // incumbent by more than the prune gap, no cell can. Runs before the
+        // budget so a converged search ends on its own bound.
+        if best_dist.is_finite() && cell.max_dist <= best_dist + tolerance {
             break;
         }
 
-        // The heap is ordered by the bound, so once the best remaining cell
-        // cannot beat the incumbent by more than the prune gap, no cell can.
-        let radius_bound = best_dist + tolerance;
-        if found && cell.max_dist <= radius_bound {
+        if iterations > tuning::MEC_GRID_CELL_BUDGET {
+            exhausted_budget = true;
             break;
         }
 
@@ -165,9 +166,7 @@ pub fn solve_grid(
 
         // Refining below the tolerance gains nothing: the child bound differs
         // from the parent's by at most `half * sqrt(2)`, already under the gap
-        // the search resolves. Without this floor a cell in a region with no
-        // admissible centre has no incumbent to prune it and splits until the
-        // half-size underflows.
+        // the search resolves.
         if half * SQRT2 <= tolerance {
             continue;
         }
@@ -184,49 +183,48 @@ pub fn solve_grid(
         // the index for "the nearest distance, or a value under this bar" lets
         // the descent stop at the first primitive inside the bar instead of
         // proving the true minimum.
-        let slack = half * SQRT2 - (radius_bound - best_dist);
-        let threshold = if found && slack > 0.0 {
+        let slack = half * SQRT2 - tolerance;
+        let threshold = if best_dist.is_finite() && slack > 0.0 {
             Some(best_dist - slack)
         } else {
             None
         };
 
         for (cx, cy) in children {
-            // A child wholly outside the search box holds no candidate.
             if cx + half < min_x || cx - half > max_x || cy + half < min_y || cy - half > max_y {
                 continue;
             }
+
+            let inside = region.contains_closed(cx, cy);
             let (d, support) = match threshold {
-                Some(t) => match nb.nearest_distance_sq_above(
-                    cx,
-                    cy,
-                    (t.max(0.0)) * (t.max(0.0)),
-                    Some(cell.support),
-                ) {
-                    Some(v) => v,
-                    // Proven within the bar: this child cannot improve.
-                    None => continue,
-                },
-                None => {
+                Some(t) if inside => {
+                    match nb.nearest_distance_sq_above(
+                        cx,
+                        cy,
+                        (t.max(0.0)) * (t.max(0.0)),
+                        Some(cell.support),
+                    ) {
+                        Some(v) => v,
+                        // Proven within the bar: this child cannot improve.
+                        None => continue,
+                    }
+                }
+                _ => {
                     let Some(v) = nb.nearest_distance_sq(cx, cy) else {
                         continue;
                     };
                     v
                 }
             };
-            let d = d.max(0.0).sqrt();
-            let max_dist = d + half * SQRT2;
-            // The bound test needs no containment result, so it runs first and
-            // most cells never pay for one.
-            if max_dist <= radius_bound {
+            let raw = d.max(0.0).sqrt();
+            let max_dist = raw + half * SQRT2;
+            if best_dist.is_finite() && max_dist <= best_dist + tolerance {
                 continue;
             }
-            let ok = region.contains(cx, cy);
-            if ok && d > best_dist {
+            if inside && raw > best_dist {
                 best_x = cx;
                 best_y = cy;
-                best_dist = d;
-                found = true;
+                best_dist = raw;
             }
             queue.push(GridCell {
                 x: cx,
@@ -238,88 +236,42 @@ pub fn solve_grid(
         }
     }
 
-    if !found {
+    if !best_dist.is_finite() || !best_x.is_finite() {
         return None;
     }
 
-    // Polish only when the search ran out of budget. A search that stopped on
-    // the bound is already within `tolerance` of the optimum, so climbing it
-    // again spends probes to recover nothing. A ridge outruns the budget before
-    // the bisection closes and can sit a percent short.
-    let (best_x, best_y) = if exhausted_budget {
-        let (px, py, _) = polish(nb, region, best_x, best_y, best_dist, tolerance, h_size);
-        (px, py)
-    } else {
-        (best_x, best_y)
-    };
+    // Polish. The search ranks cells by a bound, so its incumbent is the best
+    // sampled centre; on a plateau that can sit short of the peak. The climb
+    // fixes the local miss, the rescan fixes the basin choice.
+    // The cheap climb always runs: it costs a few dozen probes and fixes the
+    // local miss at no measurable price.
+    let mut best = (best_x, best_y, best_dist);
+    best = polish(nb, region, best, tolerance * 1e-4, h_size * 0.5);
 
-    let radius_sq = set.clearance_sq(best_x, best_y);
+    // The global rescan is the expensive recovery, so it only runs when the
+    // search stopped on the budget. A search that converged on its own bound is
+    // already within tolerance of the peak, and rescanning would add a thousand
+    // distance queries to a case that took a handful.
+    if exhausted_budget {
+        best = polish_global(nb, region, best);
+    }
+
+    if !region.contains_closed(best.0, best.1) {
+        return None;
+    }
+
+    let radius_sq = set.clearance_sq(best.0, best.1);
     if !radius_sq.is_finite() {
         return None;
     }
 
     Some(GridSolution {
-        x: best_x,
-        y: best_y,
+        x: best.0,
+        y: best.1,
         radius_sq: radius_sq.max(0.0),
         iterations,
         exhausted_budget,
     })
-}
-
-/// Climb the clearance field from an incumbent centre until no probe improves.
-///
-/// Each round probes the eight compass directions at a shrinking radius, and
-/// accepts a probe only when it is inside the region and strictly better. The
-/// radius halves whenever a round finds nothing, so the walk stops once the step
-/// falls under `tol`.
-fn polish(
-    nb: &NearestObstacleIndex,
-    region: &Region,
-    start_x: f64,
-    start_y: f64,
-    start_d: f64,
-    tol: f64,
-    initial_step: f64,
-) -> (f64, f64, f64) {
-    let mut best_x = start_x;
-    let mut best_y = start_y;
-    let mut best_d = start_d;
-    let mut step = initial_step;
-
-    for _ in 0..256 {
-        if step <= tol || !step.is_finite() {
-            break;
-        }
-        let mut moved = false;
-        for (dx, dy) in [
-            (-1.0, 0.0),
-            (1.0, 0.0),
-            (0.0, -1.0),
-            (0.0, 1.0),
-            (-1.0, -1.0),
-            (1.0, -1.0),
-            (-1.0, 1.0),
-            (1.0, 1.0),
-        ] {
-            let nx = best_x + dx * step;
-            let ny = best_y + dy * step;
-            let Some((d_sq, _)) = nb.nearest_distance_sq(nx, ny) else {
-                continue;
-            };
-            let d = d_sq.max(0.0).sqrt();
-            if d > best_d && region.contains(nx, ny) {
-                best_x = nx;
-                best_y = ny;
-                best_d = d;
-                moved = true;
-            }
-        }
-        if !moved {
-            step *= 0.5;
-        }
-    }
-    (best_x, best_y, best_d)
 }
 
 #[inline]
@@ -328,6 +280,134 @@ fn nearest_distance(nb: &NearestObstacleIndex, x: f64, y: f64) -> f64 {
         Some((d, _)) if d.is_finite() && d > 0.0 => d.sqrt(),
         _ => 0.0,
     }
+}
+
+/// Climb the clearance field from a start point.
+///
+/// Sixteen directions rather than eight, because a ridge whose direction is not
+/// axis- or diagonal-aligned is invisible to a compass walk. A successful round
+/// grows the step, so a flat basin is crossed with long strides instead of
+/// crawled; a failed one halves it. Only admissible, strictly better points are
+/// accepted, so the walk cannot leave the region.
+fn polish(
+    nb: &NearestObstacleIndex,
+    region: &Region,
+    start: (f64, f64, f64),
+    tol: f64,
+    initial_step: f64,
+) -> (f64, f64, f64) {
+    // Sixteen directions at 22.5 degree steps, built at run time so the table
+    // carries no rounded constants.
+    let dirs: [(f64, f64); 16] = std::array::from_fn(|k| {
+        let a = std::f64::consts::TAU * k as f64 / 16.0;
+        (a.cos(), a.sin())
+    });
+
+    let (mut bx, mut by, mut bd) = start;
+    if !region.contains_closed(bx, by) {
+        return start;
+    }
+
+    let max_step = initial_step * 64.0;
+    let mut step = initial_step;
+
+    for _ in 0..2048 {
+        if step <= tol || !step.is_finite() {
+            break;
+        }
+        let mut moved = false;
+        for pass in 0..2 {
+            // Second pass rotates the probes by half the angular resolution.
+            // Sixteen fixed directions leave an 11.25 degree blind gap, and a
+            // crest lying inside that gap looks locally maximal to the first
+            // pass; the rotated pass sees it. This is the difference between a
+            // climb that converges to the peak and one that stops next to it.
+            let phase = if pass == 0 {
+                0.0
+            } else {
+                std::f64::consts::TAU / 32.0
+            };
+            for (dx, dy) in dirs {
+                let (s, c) = phase.sin_cos();
+                let rx = dx * c - dy * s;
+                let ry = dx * s + dy * c;
+                let nx = bx + rx * step;
+                let ny = by + ry * step;
+                if !region.contains_closed(nx, ny) {
+                    continue;
+                }
+                let d = nearest_distance(nb, nx, ny);
+                if d > bd {
+                    bx = nx;
+                    by = ny;
+                    bd = d;
+                    moved = true;
+                }
+            }
+            if moved {
+                break;
+            }
+        }
+        if moved {
+            step = (step * 1.5).min(max_step);
+        } else {
+            step *= 0.5;
+        }
+    }
+    (bx, by, bd)
+}
+
+/// Coarse rescan of the region, then a climb from each strong sample.
+///
+/// The search ranks cells by a bound, so it can leave a whole basin unsampled,
+/// and one walk from the incumbent then settles in whichever basin it began in.
+/// Scanning coarsely, keeping the strongest samples, and climbing from each
+/// covers every basin for a bounded cost. The scan supplies basins; the climb
+/// supplies accuracy.
+fn polish_global(
+    nb: &NearestObstacleIndex,
+    region: &Region,
+    start: (f64, f64, f64),
+) -> (f64, f64, f64) {
+    let (min_x, min_y, max_x, max_y) = region.bounds();
+    let span = (max_x - min_x).max(max_y - min_y);
+    if !span.is_finite() || span <= 0.0 {
+        return start;
+    }
+
+    let side = tuning::MEC_POLISH_SCAN_SIDE;
+    let step_x = (max_x - min_x) / side as f64;
+    let step_y = (max_y - min_y) / side as f64;
+    if step_x <= 0.0 || step_y <= 0.0 {
+        return start;
+    }
+
+    let mut seeds: Vec<(f64, f64, f64)> = Vec::with_capacity(tuning::MEC_POLISH_SEEDS);
+    for i in 0..=side {
+        for j in 0..=side {
+            let x = min_x + step_x * i as f64;
+            let y = min_y + step_y * j as f64;
+            if !region.contains_closed(x, y) {
+                continue;
+            }
+            let d = nearest_distance(nb, x, y);
+            if d <= start.2 {
+                continue;
+            }
+            seeds.push((x, y, d));
+        }
+    }
+    seeds.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    seeds.truncate(tuning::MEC_POLISH_SEEDS);
+
+    let mut best = start;
+    for (x, y, d) in seeds {
+        let (px, py, pd) = polish(nb, region, (x, y, d), span * 1e-12, step_x.max(step_y));
+        if pd > best.2 {
+            best = (px, py, pd);
+        }
+    }
+    best
 }
 
 /// Centroid of the obstacle set: the mean of every point and segment midpoint.

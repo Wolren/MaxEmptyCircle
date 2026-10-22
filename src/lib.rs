@@ -120,6 +120,8 @@ pub enum MecApproach {
     ExactVoronoi,
     /// Branch-and-bound grid search over the search box.
     GridSolver,
+    /// GEOS `LargestEmptyCircle`, behind `bench-geos`. Comparison only.
+    Geos,
 }
 
 /// Largest empty circle solve result.
@@ -149,6 +151,9 @@ pub enum MecError {
     /// No admissible centre was found.
     #[error("no valid empty circle found")]
     NoCircleFound,
+    /// The GEOS comparison solve failed, behind the `bench-geos` feature.
+    #[error("GEOS comparison solve failed: {0}")]
+    GeosFailed(String),
 }
 
 /// Compute the largest empty circle among `obstacles`.
@@ -199,7 +204,9 @@ fn solve_on_set(
     // The exact path applies only when every obstacle is a point. It is also the
     // only path that is exact rather than approximated to a tolerance, so it
     // runs first and its answer stands.
-    if set.is_point_only() {
+    // The exact path is O(n^2) in its boundary family, which pays off on small
+    // sets and loses to the grid on large ones. The budget picks the crossover.
+    if set.is_point_only() && set.point_count() <= crate::tuning::MEC_EXACT_MAX_SITES {
         if let Some(c) = exact::solve_exact(set, &region) {
             let support = c.support[..c.support_len].to_vec();
             return Ok(MecResult {

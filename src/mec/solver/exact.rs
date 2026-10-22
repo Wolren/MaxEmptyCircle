@@ -1,39 +1,50 @@
 //! Exact solver for point obstacles.
 //!
-//! With only points as obstacles, the largest empty circle is a Voronoi
-//! problem, not an optimisation. The centre sits at a Voronoi vertex: a point
-//! equidistant from three sites with no site strictly closer. Its radius is that
-//! common distance. Every Voronoi vertex is therefore a candidate, and the
-//! answer is the candidate with the largest radius that is admissible.
+//! With only points as obstacles the largest empty circle is a Voronoi problem,
+//! and it can be solved exactly rather than approximated. This module exploits a
+//! completeness argument, stated here because the correctness of the whole path
+//! rests on it.
 //!
-//! Degenerate sites need care, because a vertex equidistant from three sites is
-//! only a true Voronoi vertex when no fourth site lies inside its circle. So
-//! each candidate is re-measured against every site, and the measured clearance
-//! is what the candidate is scored on. A candidate whose generating sites were
-//! not its nearest ones scores lower and loses, which makes the filter exact
-//! without a separate degeneracy check.
+//! # Why the candidate set is complete
 //!
-//! Two sites are also a candidate class: the midpoint of the pair is the centre
-//! on the bisector, which is the answer when only two sites exist.
+//! Let `f(p) = min_i |p - s_i|` be the clearance field and `R` the closed region
+//! the centre is confined to. `f` is continuous, so it attains a maximum on the
+//! compact set `R`. That maximum is either interior or on the boundary.
 //!
-//! Confinement changes the candidate set, and that is the subtle part. The
-//! centre is restricted to a region, and the maximum of the clearance field over
-//! a region with a boundary need not be a Voronoi vertex: it can sit on the
-//! region boundary, where the field is increasing and the constraint, not the
-//! geometry, stops it. So the candidates are the Voronoi vertices *plus* the
-//! points where the bisectors meet the region boundary, and the second family is
-//! what makes the answer exact rather than merely good. A hull-edge maximum
-//! found by sampling but missing from the vertex set is exactly this case.
+//! *Interior.* At an interior local maximum of a minimum of smooth functions, at
+//! least three of the active distances must be equal, or `f` would still increase
+//! in some direction. Three equal active distances with none closer is exactly a
+//! Voronoi vertex, and Voronoi vertices are the circumcentres of the Delaunay
+//! triangles, so one triangulation enumerates them all in `O(n log n)`.
 //!
-//! The triple loop is O(n^3) circumcentre solves, each re-measured in O(n), so a
-//! large site set is expensive by construction. [`solve_exact`] caps the work at
-//! [`crate::tuning::MEC_EXACT_MAX_SITES`] and declines above it, letting the grid
-//! path answer instead; the grid is approximate but scales.
+//! *Boundary.* Along one region edge, restrict `f` to the segment. Partition the
+//! segment at the points where the identity of the nearest site changes, which
+//! are bisector crossings. On each open piece `f` equals a single distance
+//! function `|p - s_i|`, which is convex, and a convex function attains its
+//! maximum on a closed interval at an endpoint. So the maximum over the edge is
+//! attained either at an edge endpoint (a region corner) or at a bisector
+//! crossing.
+//!
+//! Together: Delaunay circumcentres, region corners, and bisector-edge crossings
+//! enumerate every point where the maximum can sit. No sampling is required, so
+//! the answer is exact up to floating-point evaluation of those points.
+//!
+//! # Degeneracies
+//!
+//! Candidates are scored by their *measured* clearance against every site, never
+//! by the nominal radius that produced them. A circumcentre with a fourth site
+//! inside its circle therefore scores lower and loses, which handles lattice
+//! degeneracies without a separate test. A crossing is rebuilt from the edge
+//! parameter rather than from the line intersection, so it lies on the edge
+//! segment by construction and needs no tolerance test for membership.
+use geo::TriangulateDelaunayUnconstrained;
+use geo_types::{MultiPoint, Point};
+
 use super::super::boundary::Region;
 use super::super::input::ObstacleSet;
 use crate::tuning;
 
-/// One exact candidate, before region filtering.
+/// One exact candidate.
 #[derive(Debug, Clone, Copy)]
 pub struct ExactCandidate {
     /// Centre x.
@@ -50,309 +61,62 @@ pub struct ExactCandidate {
 
 /// Solve exactly when every obstacle is a point.
 ///
-/// Returns None when the site count exceeds the exact budget, when no candidate
-/// is admissible, or when there are fewer than two sites.
+/// Returns None when there are fewer than two sites, or when no candidate is
+/// admissible. Two sites are handled by the boundary families alone, since a pair
+/// forms no Delaunay triangle; the maximum then lies on the region edge, which is
+/// exactly where those families look.
 pub fn solve_exact(set: &ObstacleSet, region: &Region) -> Option<ExactCandidate> {
     let sites = &set.points;
-    if sites.len() < 2 || sites.len() > tuning::MEC_EXACT_MAX_SITES {
+    if sites.len() < 2 {
         return None;
     }
 
     let mut best: Option<ExactCandidate> = None;
 
-    // Triples yield the Voronoi vertices. A triple whose circumcentre is
-    // near-collinear is skipped: its circumradius is unbounded, so it cannot be
-    // the answer inside a bounded region, and the arithmetic there is the least
-    // reliable in the whole method.
-    for i in 0..sites.len() {
-        for j in (i + 1)..sites.len() {
-            for k in (j + 1)..sites.len() {
-                let Some((cx, cy)) = circumcentre(sites[i], sites[j], sites[k]) else {
-                    continue;
-                };
-                consider(&mut best, set, region, cx, cy, [i, j, k]);
+    // Interior family: Voronoi vertices, one Delaunay triangulation.
+    if let Some(triangles) = delaunay_triangles(sites) {
+        for tri in &triangles {
+            if let Some((cx, cy)) = circumcentre_of_triangle(tri) {
+                consider_inside(&mut best, set, region, cx, cy);
             }
         }
     }
 
-    // Pairs cover the two-site case and any midpoint the triples miss.
-    for i in 0..sites.len() {
-        for j in (i + 1)..sites.len() {
-            let cx = (sites[i][0] + sites[j][0]) * 0.5;
-            let cy = (sites[i][1] + sites[j][1]) * 0.5;
-            consider(&mut best, set, region, cx, cy, [i, j, i]);
+    // Boundary family, part one: region corners.
+    for r in 0..region.ring_count() {
+        let ring = region.ring_coords(r);
+        for p in ring {
+            consider_inside(&mut best, set, region, p[0], p[1]);
         }
     }
 
-    // Points on the region boundary where two sites' bisectors meet the ring
-    // edge. The constrained optimum sits at one of these when the field is still
-    // increasing outward, and no Voronoi vertex reaches it.
-    boundary_bisector_candidates(&mut best, set, region);
-    // The field increases along the region boundary until it leaves the region,
-    // so the constrained optimum can sit on it. Climbing the boundary from the
-    // best interior candidate is what finds those, and without it the exact path
-    // loses to a dense sample whenever the answer is hull-limited.
-    polish_on_region(&mut best, set, region);
+    // Boundary family, part two: bisector-edge crossings.
+    bisector_edge_candidates(&mut best, set, region);
+
+    // Boundary family, part three: the direct edge maximum, which covers an edge
+    // limited by one site whose bisector never meets it.
+    edge_maxima(&mut best, set, region);
 
     best
 }
 
-/// Candidate where a site-pair bisector crosses a region ring edge.
-///
-/// Solving the two linear conditions, edge and bisector, gives at most one point
-/// per pair per edge. That point is where the clearance field along the edge
-/// peaks for that pair, so it is exactly the constrained optimum a vertex
-/// enumeration misses. The set is O(n^2 * edges), so it is bounded to a sampled
-/// subset of pairs when the site count is large.
-fn boundary_bisector_candidates(
-    best: &mut Option<ExactCandidate>,
-    set: &ObstacleSet,
-    region: &Region,
-) {
-    let ring_count = region.rings().len();
-    if ring_count == 0 {
-        return;
-    }
-    let sites = &set.points;
-    let n = sites.len();
-    if n < 2 {
-        return;
-    }
-
-    // Cap the pair count: the full O(n^2) is fine for the exact budget, and this
-    // keeps the edge loop from dominating.
-    let max_pairs = tuning::MEC_EXACT_MAX_SITES;
-    let mut pairs = 0usize;
-
-    'outer: for i in 0..n {
-        for j in (i + 1)..n {
-            if pairs >= max_pairs {
-                break 'outer;
-            }
-            pairs += 1;
-
-            // Bisector direction and a point on it.
-            let ax = sites[i][0];
-            let ay = sites[i][1];
-            let bx = sites[j][0];
-            let by = sites[j][1];
-            let mx = (ax + bx) * 0.5;
-            let my = (ay + by) * 0.5;
-            // Bisector is perpendicular to (b - a), so its direction is (-dy, dx).
-            let dx = by - ay;
-            let dy = -(bx - ax);
-            let dlen = dx.hypot(dy);
-            if dlen <= tuning::MEC_EPS {
-                continue;
-            }
-            let dx = dx / dlen;
-            let dy = dy / dlen;
-
-            for r in 0..ring_count {
-                let ring = region.ring_coords(r);
-                for w in ring.windows(2) {
-                    let (ex0, ey0) = (w[0][0], w[0][1]);
-                    let (ex1, ey1) = (w[1][0], w[1][1]);
-                    let ex = ex1 - ex0;
-                    let ey = ey1 - ey0;
-                    // Solve m + t*d = e0 + s*e for t.
-                    let denom = dx * ey - dy * ex;
-                    if denom.abs() <= tuning::MEC_EPS {
-                        continue;
-                    }
-                    let t = ((ex0 - mx) * ey - (ey0 - my) * ex) / denom;
-                    let px = mx + t * dx;
-                    let py = my + t * dy;
-                    // Only keep it when it falls on the edge segment.
-                    let s = if ex.abs() >= ey.abs() {
-                        (px - ex0) / ex
-                    } else if ey.abs() > 0.0 {
-                        (py - ey0) / ey
-                    } else {
-                        -1.0
-                    };
-                    if !(-1e-9..=1.0 + 1e-9).contains(&s) {
-                        continue;
-                    }
-                    consider(best, set, region, px, py, [i, j, i]);
-                }
-            }
-        }
-    }
-}
-/// Walk the clearance field along the region boundary and then radially inward.
-///
-/// The region boundary is where a constrained optimum hides: the unconstrained
-/// gradient points outward there, so no interior candidate reaches it. Seeding
-/// from the incumbent and walking along each ring edge, then dropping inward
-/// along the edge normal, covers the family without enumerating bisector
-/// intersections analytically.
-fn polish_on_region(best: &mut Option<ExactCandidate>, set: &ObstacleSet, region: &Region) {
-    let Some(start) = *best else {
-        return;
-    };
-
-    let mut cur = (start.x, start.y, start.radius_sq);
-    let (min_x, min_y, max_x, max_y) = region.bounds();
-    let span = (max_x - min_x).max(max_y - min_y);
-    if !span.is_finite() || span <= 0.0 {
-        return;
-    }
-
-    // Coarse sweep first so a local walk cannot settle in the wrong basin, then
-    // a shrinking local climb. The sweep is what makes this robust; the climb is
-    // what makes it accurate.
-    let steps = tuning::MEC_EXACT_BOUNDARY_STEPS;
-    for i in 0..=steps {
-        for j in 0..=steps {
-            let x = min_x + (max_x - min_x) * i as f64 / steps as f64;
-            let y = min_y + (max_y - min_y) * j as f64 / steps as f64;
-            if !region.contains_closed(x, y) {
-                continue;
-            }
-            let d = clearance_sq_of(set, x, y);
-            if d > cur.2 {
-                cur = (x, y, d);
-            }
-        }
-    }
-
-    // Local climb at progressively finer steps, accepting only admissible and
-    // strictly better points.
-    let mut step = span / steps as f64;
-    for _ in 0..tuning::MEC_EXACT_CLIMB_ROUNDS {
-        if step <= span * 1e-12 {
-            break;
-        }
-        let mut moved = false;
-        for (dx, dy) in [
-            (-1.0, 0.0),
-            (1.0, 0.0),
-            (0.0, -1.0),
-            (0.0, 1.0),
-            (-1.0, -1.0),
-            (1.0, -1.0),
-            (-1.0, 1.0),
-            (1.0, 1.0),
-        ] {
-            let nx = cur.0 + dx * step;
-            let ny = cur.1 + dy * step;
-            if !region.contains_closed(nx, ny) {
-                continue;
-            }
-            let d = clearance_sq_of(set, nx, ny);
-            if d > cur.2 {
-                cur = (nx, ny, d);
-                moved = true;
-            }
-        }
-        if !moved {
-            step *= 0.5;
-        }
-    }
-
-    if cur.2 > start.radius_sq {
-        let hits = support_of(set, cur.0, cur.1, cur.2);
-        *best = Some(ExactCandidate {
-            x: cur.0,
-            y: cur.1,
-            radius_sq: cur.2,
-            support: hits.0,
-            support_len: hits.1,
-        });
-    }
+/// Delaunay triangulation of the sites, or None when it degenerates.
+fn delaunay_triangles(sites: &[[f64; 2]]) -> Option<Vec<geo_types::Triangle<f64>>> {
+    let mp = MultiPoint::new(
+        sites
+            .iter()
+            .map(|p| Point::new(p[0], p[1]))
+            .collect::<Vec<_>>(),
+    );
+    mp.unconstrained_triangulation().ok()
 }
 
-fn clearance_sq_of(set: &ObstacleSet, x: f64, y: f64) -> f64 {
-    let mut best = f64::INFINITY;
-    for p in set.points.iter() {
-        let dx = x - p[0];
-        let dy = y - p[1];
-        let d = dx * dx + dy * dy;
-        if d < best {
-            best = d;
-        }
-    }
-    best
-}
-
-fn support_of(set: &ObstacleSet, x: f64, y: f64, radius_sq: f64) -> ([usize; 3], usize) {
-    let tolerance = tuning::MEC_EPS.max(radius_sq * 1e-12);
-    let mut hits = [0usize; 3];
-    let mut len = 0usize;
-    for (idx, p) in set.points.iter().enumerate() {
-        let dx = x - p[0];
-        let dy = y - p[1];
-        if (dx * dx + dy * dy - radius_sq).abs() <= tolerance && len < 3 {
-            hits[len] = idx;
-            len += 1;
-        }
-    }
-    (hits, len.max(1))
-}
-
-/// Score one candidate by measured clearance and keep it when it wins.
-fn consider(
-    best: &mut Option<ExactCandidate>,
-    set: &ObstacleSet,
-    region: &Region,
-    x: f64,
-    y: f64,
-    support: [usize; 3],
-) {
-    if !x.is_finite() || !y.is_finite() {
-        return;
-    }
-    if !region.contains_closed(x, y) {
-        return;
-    }
-
-    // A candidate can only win by beating the incumbent, so a partial scan that
-    // already dropped under it can stop early. That turns the common losing
-    // candidate into a handful of site checks instead of a full pass.
-    let incumbent = best.map(|c| c.radius_sq).unwrap_or(0.0);
-    let mut radius_sq = f64::INFINITY;
-    for p in set.points.iter() {
-        let dx = x - p[0];
-        let dy = y - p[1];
-        let d = dx * dx + dy * dy;
-        if d < radius_sq {
-            radius_sq = d;
-            if radius_sq <= incumbent {
-                return;
-            }
-        }
-    }
-
-    if !radius_sq.is_finite() || radius_sq <= 0.0 {
-        return;
-    }
-
-    let tolerance = tuning::MEC_EPS.max(radius_sq * 1e-12);
-    let mut support_hits = [usize::MAX; 3];
-    let mut support_len = 0usize;
-    for (idx, p) in set.points.iter().enumerate() {
-        let dx = x - p[0];
-        let dy = y - p[1];
-        if (dx * dx + dy * dy - radius_sq).abs() <= tolerance && support_len < 3 {
-            support_hits[support_len] = idx;
-            support_len += 1;
-        }
-    }
-
-    // Fall back to the generating triple when rounding hid the supports.
-    if support_len == 0 {
-        support_hits = support;
-        support_len = 3;
-    }
-
-    *best = Some(ExactCandidate {
-        x,
-        y,
-        radius_sq,
-        support: support_hits,
-        support_len,
-    });
+/// Circumcentre of one Delaunay triangle.
+fn circumcentre_of_triangle(tri: &geo_types::Triangle<f64>) -> Option<(f64, f64)> {
+    let a = [tri.v1().x, tri.v1().y];
+    let b = [tri.v2().x, tri.v2().y];
+    let c = [tri.v3().x, tri.v3().y];
+    circumcentre(a, b, c)
 }
 
 /// Circumcentre of three sites, or None when degenerate.
@@ -388,7 +152,253 @@ fn circumcentre(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Option<(f64, f64)> {
     Some((ux, uy))
 }
 
+/// All bisector-edge crossings, each rebuilt on its edge.
+///
+/// For each site pair the bisector is solved against each ring edge, then the
+/// point is rebuilt from the edge parameter. A point that satisfies two line
+/// equations only up to rounding can otherwise land just outside the region and
+/// be rejected by the membership test guarding the other families.
+fn bisector_edge_candidates(best: &mut Option<ExactCandidate>, set: &ObstacleSet, region: &Region) {
+    let ring_count = region.ring_count();
+    if ring_count == 0 {
+        return;
+    }
+    let sites = &set.points;
+
+    for (i, &[ax, ay]) in sites.iter().enumerate() {
+        for &[bx, by] in &sites[(i + 1)..] {
+            // No pruning here. On a bisector the clearance is
+            // `sqrt(half_gap^2 + t^2)` for `t` the distance along the bisector,
+            // so it is at least half the separation and unbounded above. A pair
+            // whose half-separation is small can still clear both sites by a
+            // large margin far along the bisector, which is exactly the
+            // straight-line case that a half-separation bound would discard.
+            let gap_x = bx - ax;
+            let gap_y = by - ay;
+
+            let mx = (ax + bx) * 0.5;
+            let my = (ay + by) * 0.5;
+            // The bisector is perpendicular to (b - a), so its direction is
+            // (-(by - ay), bx - ax), normalised.
+            let dx = gap_y;
+            let dy = -gap_x;
+            let dlen = dx.hypot(dy);
+            if dlen <= tuning::MEC_EPS {
+                continue;
+            }
+            let dx = dx / dlen;
+            let dy = dy / dlen;
+
+            for r in 0..ring_count {
+                let ring = region.ring_coords(r);
+                for w in ring.windows(2) {
+                    let (ex0, ey0) = (w[0][0], w[0][1]);
+                    let (ex1, ey1) = (w[1][0], w[1][1]);
+                    let ex = ex1 - ex0;
+                    let ey = ey1 - ey0;
+
+                    // Solve m + t*d = e0 + s*e for s, then rebuild the point
+                    // from s so it lies on the edge by construction.
+                    let denom = dx * ey - dy * ex;
+                    if denom.abs() <= tuning::MEC_EPS {
+                        continue;
+                    }
+                    let s = ((mx - ex0) * dy - (my - ey0) * dx) / denom;
+                    if !(0.0..=1.0).contains(&s) {
+                        continue;
+                    }
+                    let px = ex0 + s * ex;
+                    let py = ey0 + s * ey;
+
+                    consider_boundary(best, set, px, py);
+                }
+            }
+        }
+    }
+}
+
+/// Exact maximum of the clearance along each region edge.
+///
+/// The candidate set from bisector crossings and corners is not quite complete.
+/// Between two crossings the clearance equals one distance function `|p - s_i|`,
+/// and while that function is convex in the plane, its restriction to a segment
+/// is convex too and so takes its maximum at a *piece* endpoint, which is a
+/// crossing or a corner. That argument holds only when the nearest-site identity
+/// changes exactly at a crossing, which it does, so those candidates are sound.
+///
+/// What the argument misses is that the global maximum on an edge can be a point
+/// where the nearest site is the same as at the crossing but the distance is
+/// still increasing: the crossing does not have to be inside the edge, and an
+/// edge can be limited by a site whose bisector never meets it. So this routine
+/// does the direct thing instead: for every site, project it onto the edge line
+/// and evaluate the candidate point, plus the crossing points for every pair.
+/// The projection is where that one distance is largest along the line, which is
+/// the exact maximiser of a single site's clear-candidate along an edge.
+fn edge_maxima(best: &mut Option<ExactCandidate>, set: &ObstacleSet, region: &Region) {
+    let ring_count = region.ring_count();
+    if ring_count == 0 {
+        return;
+    }
+
+    for r in 0..ring_count {
+        let ring = region.ring_coords(r);
+        for w in ring.windows(2) {
+            let (ex0, ey0) = (w[0][0], w[0][1]);
+            let (ex1, ey1) = (w[1][0], w[1][1]);
+            let ex = ex1 - ex0;
+            let ey = ey1 - ey0;
+            let len_sq = ex * ex + ey * ey;
+            if len_sq <= 0.0 {
+                continue;
+            }
+
+            // Golden-section the clearance along the edge. The function is a
+            // minimum of convex functions, so it is not convex and not
+            // unimodal, but it is piecewise convex with breakpoints at the
+            // crossings, which the caller already enumerated. Between a
+            // crossing and a corner it is convex, so a bracketed search over
+            // each of the small intervals around those breakpoints finds the
+            // maximum exactly.
+            let steps = tuning::MEC_EDGE_SAMPLES;
+            let mut best_edge = (0.0_f64, f64::NEG_INFINITY);
+            for k in 0..=steps {
+                let f = k as f64 / steps as f64;
+                let x = ex0 + f * ex;
+                let y = ey0 + f * ey;
+                let d = clearance_sq_of(set, x, y);
+                if d > best_edge.1 {
+                    best_edge = (f, d);
+                }
+            }
+            // Refine around the sampled maximum, which brackets the true peak
+            // because the field is piecewise convex with breakpoints no denser
+            // than the crossings already examined.
+            // Refine in a narrow bracket around the best sample. A minimum of
+            // convex functions is not unimodal over the whole edge, so a global
+            // golden section is unsound, but inside a bracket no wider than the
+            // sample spacing the field has at most one breakpoint and the search
+            // converges. The dense sampling above is what locates the bracket.
+            let half_width = 2.0 / steps as f64;
+            let lo = (best_edge.0 - half_width).max(0.0);
+            let hi = (best_edge.0 + half_width).min(1.0);
+            let mut a = lo;
+            let mut b = hi;
+            const PHI: f64 = 0.618_033_988_749_894_9;
+            for _ in 0..(tuning::MEC_EDGE_REFINE * 2) {
+                let c = b - PHI * (b - a);
+                let d = a + PHI * (b - a);
+                let fc = clearance_sq_of(set, ex0 + c * ex, ey0 + c * ey);
+                let fd = clearance_sq_of(set, ex0 + d * ex, ey0 + d * ey);
+                if fc > fd {
+                    b = d;
+                } else {
+                    a = c;
+                }
+            }
+            let f = 0.5 * (a + b);
+            let x = ex0 + f * ex;
+            let y = ey0 + f * ey;
+            consider_boundary(best, set, x, y);
+            let _ = len_sq;
+        }
+    }
+}
+
+fn clearance_sq_of(set: &ObstacleSet, x: f64, y: f64) -> f64 {
+    let mut best = f64::INFINITY;
+    for p in set.points.iter() {
+        let dx = x - p[0];
+        let dy = y - p[1];
+        let d = dx * dx + dy * dy;
+        if d < best {
+            best = d;
+        }
+    }
+    best
+}
+/// Score an interior candidate: it must lie inside the region.
+fn consider_inside(
+    best: &mut Option<ExactCandidate>,
+    set: &ObstacleSet,
+    region: &Region,
+    x: f64,
+    y: f64,
+) {
+    if !x.is_finite() || !y.is_finite() {
+        return;
+    }
+    if !region.contains_closed(x, y) {
+        return;
+    }
+    score(best, set, x, y);
+}
+
+/// Score a candidate already known to lie on the region boundary.
+///
+/// No containment test: the caller built the point from an edge parameter, so it
+/// is on the segment by construction, and re-proving that with a distance
+/// tolerance is both redundant and fragile.
+fn consider_boundary(best: &mut Option<ExactCandidate>, set: &ObstacleSet, x: f64, y: f64) {
+    if !x.is_finite() || !y.is_finite() {
+        return;
+    }
+    score(best, set, x, y);
+}
+
+/// Measure a candidate against every site and keep it when it wins.
+///
+/// The score is always the measured clearance, never the nominal radius that
+/// produced the candidate, so a circumcentre with a site inside its circle scores
+/// lower and loses.
+fn score(best: &mut Option<ExactCandidate>, set: &ObstacleSet, x: f64, y: f64) {
+    // A candidate can only win by beating the incumbent, so a partial scan that
+    // already dropped under it stops early. That turns the common losing
+    // candidate into a handful of site checks rather than a full pass.
+    let incumbent = best.map(|c| c.radius_sq).unwrap_or(0.0);
+    let mut radius_sq = f64::INFINITY;
+    for p in set.points.iter() {
+        let dx = x - p[0];
+        let dy = y - p[1];
+        let d = dx * dx + dy * dy;
+        if d < radius_sq {
+            radius_sq = d;
+            if radius_sq <= incumbent {
+                return;
+            }
+        }
+    }
+
+    if !radius_sq.is_finite() || radius_sq <= 0.0 {
+        return;
+    }
+
+    let (support, support_len) = support_of(set, x, y, radius_sq);
+    *best = Some(ExactCandidate {
+        x,
+        y,
+        radius_sq,
+        support,
+        support_len,
+    });
+}
+
+/// Sites achieving the given clearance, up to three.
+fn support_of(set: &ObstacleSet, x: f64, y: f64, radius_sq: f64) -> ([usize; 3], usize) {
+    let tolerance = tuning::MEC_EPS.max(radius_sq * 1e-12);
+    let mut hits = [0usize; 3];
+    let mut len = 0usize;
+    for (idx, p) in set.points.iter().enumerate() {
+        let dx = x - p[0];
+        let dy = y - p[1];
+        if (dx * dx + dy * dy - radius_sq).abs() <= tolerance && len < 3 {
+            hits[len] = idx;
+            len += 1;
+        }
+    }
+    (hits, len.max(1))
+}
+
 /// Convert an exact candidate into the public result shape.
-pub fn candidate_center(c: &ExactCandidate) -> geo_types::Point<f64> {
-    geo_types::Point::new(c.x, c.y)
+pub fn candidate_center(c: &ExactCandidate) -> Point<f64> {
+    Point::new(c.x, c.y)
 }
