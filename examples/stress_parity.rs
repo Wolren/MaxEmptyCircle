@@ -4,7 +4,7 @@ use max_empty_circle::geo_types::{
     Coord, Geometry, LineString, MultiLineString, MultiPoint, Point, Polygon,
 };
 use max_empty_circle::mec::input::ObstacleSet;
-use max_empty_circle::mec::solver::bench_geos::{geos_tolerance_for, solve_geos};
+use max_empty_circle::mec::solver::bench_geos::solve_geos;
 use max_empty_circle::{largest_empty_circle, MecOptions};
 
 struct Rng(u64);
