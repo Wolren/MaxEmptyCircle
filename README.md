@@ -13,21 +13,12 @@ Finds the largest circle that fits between obstacles.
 </div>
 
 The largest empty circle is the biggest circle that fits in open space. Obstacles
-are anything the circle must avoid: points, lines, or polygons, alone or mixed.
-An optional boundary restricts where the centre may sit, and it is a separate
-input from the obstacles: a building is an obstacle, a property line is a
-boundary. This is the dual of the maximum inscribed circle, which sits inside one
-polygon and is limited by that polygon, while this one sits between obstacles
-that need not enclose the centre. Point obstacles take an exact path, since the
-optimum is a Delaunay circumcentre or a region-boundary point and one
-triangulation enumerates both. Segments and polygons take a branch and bound on
-the 1-Lipschitz bound of obstacle distance, with a recovery climb when the work
-cap trips. A polygon contributes its edges rather than its interior, matching
-GEOS. The reported radius is always measured against the obstacles at the
-returned centre, so a returned circle is empty by construction. Obstacles that
-enclose no area give a zero-radius circle on the obstacle, as GEOS does. The full
-API reference and the algorithm detail are in the crate documentation:
-`cargo doc --open`, no feature needed.
+are anything the circle must avoid: points, lines, or polygons, alone or mixed. An
+optional boundary restricts where the centre may sit, and it is a separate input
+from the obstacles: a building is an obstacle, a property line is a boundary. The
+reported radius is the measured clearance at the reported centre, so a returned
+circle is empty by construction. Input that encloses no area gives a zero-radius
+circle on the obstacle, as GEOS does.
 
 ## Correctness
 
