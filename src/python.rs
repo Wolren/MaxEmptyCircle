@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use super::{largest_empty_circle, MecApproach, MecOptions, MecResult};
 
 /// Result of a largest empty circle solve.
-#[pyclass(name = "MecResult")]
+#[pyclass(name = "MecResult", skip_from_py_object)]
 #[derive(Clone)]
 pub struct MecResultPy {
     /// Circle centre x coordinate.
@@ -47,6 +47,7 @@ impl From<MecResult> for MecResultPy {
             approach: match r.approach {
                 MecApproach::ExactVoronoi => "exact_voronoi".to_string(),
                 MecApproach::GridSolver => "grid".to_string(),
+                MecApproach::Geos => "geos".to_string(),
             },
             candidate_count: r.candidate_count,
             support: r.support,
@@ -118,7 +119,7 @@ pub fn solve_mec_py(
     segments: Option<Vec<(f64, f64, f64, f64)>>,
     boundary: Option<Vec<(f64, f64)>>,
 ) -> PyResult<MecResultPy> {
-    py.allow_threads(|| solve(points, segments.unwrap_or_default(), boundary))
+    py.detach(|| solve(points, segments.unwrap_or_default(), boundary))
 }
 
 /// Register the module contents.
