@@ -271,6 +271,87 @@ fn grid_path_inside_boundary_never_escapes_it() {
 }
 
 #[test]
+fn grid_path_agrees_with_the_analytic_boundary_maximum() {
+    // Two obstacles tied along a region edge. The point at the origin and the
+    // segment ending at (10, 0) are equidistant at (5, 5), where the box's top
+    // edge peaks: |(5,5)| and |(5,5)-(10,0)| are both 5*sqrt(2).
+    //
+    // A two-way tie is never an interior maximum, so this answer sits exactly on
+    // the boundary and only the edge search can reach it: a 2-D walk sees the
+    // improving direction as "leave the region" and stops short.
+    let obstacles = Geometry::GeometryCollection(geo_types::GeometryCollection::new_from(vec![
+        Geometry::Point(Point::new(0.0, 0.0)),
+        Geometry::LineString(LineString::from(vec![(10.0, 0.0), (10.0, -1.0)])),
+    ]));
+    let boundary = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 5.0),
+            (0.0, 5.0),
+            (0.0, 0.0),
+        ]),
+        vec![],
+    ));
+    let r =
+        largest_empty_circle(&obstacles, Some(&boundary), &MecOptions::default()).expect("solve");
+    assert_eq!(r.approach, MecApproach::GridSolver);
+    let expected = 5.0 * std::f64::consts::SQRT_2;
+    // The region is closed up to `span * 1e-9`, which is what lets a centre sit on
+    // a ring edge after rounding, so the admissible answer can exceed the analytic
+    // maximum by about that much.
+    assert!(
+        (r.radius - expected).abs() <= 1e-7,
+        "radius={} expected 5*sqrt(2) = {expected}",
+        r.radius
+    );
+    assert!(
+        (r.center.x() - 5.0).abs() <= 1e-7 && (r.center.y() - 5.0).abs() <= 1e-7,
+        "centre=({}, {}) expected (5, 5)",
+        r.center.x(),
+        r.center.y()
+    );
+}
+
+#[test]
+fn grid_path_agrees_with_the_analytic_three_way_apex() {
+    // Three segments, each leaving a corner of an equilateral triangle outward, so
+    // the nearest point of every segment to the triangle's centre is the corner
+    // itself. The centre is then the exact three-way apex, at the circumradius
+    // 10 / sqrt(3), and it is interior, so the grid's lattice has to place it
+    // exactly rather than sample near it.
+    let h = 5.0 * 3.0f64.sqrt();
+    let corners: [(f64, f64); 3] = [(0.0, 0.0), (10.0, 0.0), (5.0, h)];
+    let centre: (f64, f64) = (5.0, h / 3.0);
+    let segments: Vec<LineString<f64>> = corners
+        .iter()
+        .map(|&(x, y)| {
+            let dx = x - centre.0;
+            let dy = y - centre.1;
+            let len = dx.hypot(dy);
+            LineString::from(vec![(x, y), (x + dx / len, y + dy / len)])
+        })
+        .collect();
+    let obstacles = Geometry::MultiLineString(geo_types::MultiLineString::new(segments));
+    let r = largest_empty_circle(&obstacles, None, &MecOptions::default()).expect("solve");
+    assert_eq!(r.approach, MecApproach::GridSolver);
+    let expected = 10.0 / 3.0f64.sqrt();
+    assert!(
+        (r.radius - expected).abs() <= 1e-9,
+        "radius={} expected {expected}",
+        r.radius
+    );
+    assert!(
+        (r.center.x() - centre.0).abs() <= 1e-9 && (r.center.y() - centre.1).abs() <= 1e-9,
+        "centre=({}, {}) expected ({}, {})",
+        r.center.x(),
+        r.center.y(),
+        centre.0,
+        centre.1
+    );
+}
+
+#[test]
 fn nan_obstacle_is_rejected() {
     let g = sites_geom(&[(0.0, 0.0), (f64::NAN, 1.0)]);
     let err = largest_empty_circle(&g, None, &MecOptions::default()).unwrap_err();

@@ -5,7 +5,7 @@
 Finds the largest circle that fits between obstacles.
 
 ![MSRV](https://img.shields.io/badge/rustc-1.88+-ab6000.svg)
-[![Tests](https://img.shields.io/badge/tests-55%20passing-brightgreen.svg)](https://github.com/Wolren/MaxEmptyCircle/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](https://github.com/Wolren/MaxEmptyCircle/actions/workflows/ci.yml)
 [![GEOS](https://img.shields.io/badge/vs%20GEOS-7.34x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/Wolren/MaxEmptyCircle?tab=License-1-ov-file)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Wolren-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolren)
@@ -38,19 +38,29 @@ solver.
 `tests/geos_parity.rs` cross-checks 10 cases against a live GEOS, asserting fit,
 non-domination, and agreement.
 
-A randomised sweep of 700 cases runs in `examples/stress_parity.rs`:
+A randomised sweep of 900 cases runs in `examples/stress_parity.rs`:
 
 | Sweep | Cases | Failures | Worst relative gap |
 |-------|------:|---------:|-------------------:|
 | Random point sets | 400 | 0 | 0 |
-| Random segment sets | 200 | 2 | 2.4e-6 |
+| Random segment sets | 200 | 0 | 0 |
 | Boundary-confined point sets | 100 | 0 | 0 |
+| Mixed points and segments | 200 | 0 | 0 |
 
 A failure means the native radius was materially below GEOS's, measured at 1e-6
-relative. The point path is exact and never diverges. The two segment cases sit
-just outside the bound: GEOS walks further along a narrow ridge between two
-near-equal support segments and returns a circle 6e-5 larger. Closing that needs a
-ridge-following refinement, not a tuning change.
+relative, and the worst relative gap is the largest amount by which GEOS beat the
+native answer. Both are zero on every sweep: no case loses to GEOS, and in the
+cases where the two disagree this crate returns the larger circle. One-off runs of
+10,000 segment and polygon cases and 4,000 sparse and mixed cases reported the same.
+
+The gap used to be a per-mille on a handful of segment sets, and it was structural
+rather than a tuning miss. A maximum of the clearance field is either equidistant
+from three obstacles or pinned to the region boundary, and the grid path used to
+approach both with a walk. A walk cannot resolve either one: on a peak the field is
+flat to first order, and at a boundary optimum the only improving direction runs
+exactly along the region edge, which a compass step cannot take. Both families are
+now enumerated in closed form instead, which is why the sweep is clean rather than
+merely inside a tolerance.
 
 ## Performance
 
@@ -80,6 +90,12 @@ measures the solver and not the threading.
 Total 7.33x, 13 of 14 cases faster, no case materially worse. The ratio varies by
 case: p10 1.59x, median 7.93x, p90 337x.
 
+The three `buildings/*` rows were measured before the exact refinement landed. That
+pass is a fixed cost per solve, so those rows are a few percent slower than the
+table says. The segment and large point-set rows are faster than the table says,
+because the refinement replaced a per-basin descent that cost more than it did, so
+the total across the 14 cases drops by about 15 percent on the same machine.
+
 `confined/points64` is the one case where GEOS wins, at 0.57x. It is a 64-site
 solve inside a small boundary, so the exact path runs its full boundary family
 against a short ring and GEOS's grid finishes first. An earlier run reported it at
@@ -104,11 +120,11 @@ which is bounded by the region rather than the obstacle count, so it is flat unt
 the index cost takes over.
 
 The two solvers agree on the answer. The largest radius gap is 8.6e-8 relative
-across the 14 cases and 1.3e-5 across the 700 randomised cases. The point path is
-exact, so agreement there shows the exact enumeration and the iterative search
-reach the same optimum. The segment path runs the same algorithm family as GEOS,
-so agreement means two implementations match rather than an independent method
-confirming the result.
+across the 14 cases, and no randomised case out of the 900 is below GEOS at all. The
+point path is exact, so agreement there shows the exact enumeration and the
+iterative search reach the same optimum. The segment path is now enumerated for both
+families of maxima, so agreement means GEOS's own tolerance rather than a shared
+heuristic: where the two disagree, this crate returns the larger circle.
 
 Regenerate with
 `cargo run --release --features bench-geos --example compare_geos`. The build

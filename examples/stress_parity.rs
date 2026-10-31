@@ -164,9 +164,68 @@ fn main() {
         }
     }
 
+    // Mixed points and segments. This is the family that exposed the last
+    // accuracy defect: with few, long obstacles the field is flat enough that the
+    // maximum lands on the region edge, tied between two obstacles, where a 2-D
+    // climb cannot follow it.
+    let mut fails_m = 0usize;
+    for seed in 1..=200u64 {
+        let mut rng = Rng((seed.wrapping_mul(0x2545_F491_4F6C_DD1D) ^ 0x9E37) | 1);
+        let n_pts = 2 + (seed as usize % 6);
+        let n_seg = 2 + (seed as usize % 4);
+        let pts: Vec<Point<f64>> = (0..n_pts)
+            .map(|_| Point::new(rng.range(0.0, 100.0), rng.range(0.0, 100.0)))
+            .collect();
+        let segs: Vec<LineString<f64>> = (0..n_seg)
+            .map(|_| {
+                let x = rng.range(0.0, 100.0);
+                let y = rng.range(0.0, 100.0);
+                let a = rng.range(0.0, std::f64::consts::TAU);
+                let len = rng.range(10.0, 60.0);
+                LineString::from(vec![
+                    Coord { x, y },
+                    Coord {
+                        x: x + len * a.cos(),
+                        y: y + len * a.sin(),
+                    },
+                ])
+            })
+            .collect();
+        let g = Geometry::GeometryCollection(geo_types::GeometryCollection::new_from(vec![
+            Geometry::MultiPoint(MultiPoint::new(pts)),
+            Geometry::MultiLineString(MultiLineString::new(segs)),
+        ]));
+        let Ok(set) = ObstacleSet::from_geometry(&g) else {
+            continue;
+        };
+        let Ok(nat) = largest_empty_circle(&g, None, &MecOptions::default()) else {
+            continue;
+        };
+        let Ok(ge) = solve_geos(&set, None) else {
+            continue;
+        };
+        let rel = (ge.radius - nat.radius) / ge.radius.max(1e-300);
+        total += 1;
+        if nat.radius + nat.radius * 1e-6 < ge.radius {
+            fails_m += 1;
+            println!(
+                "MIX FAIL seed={seed} native={:.9} geos={:.9} gap={:.3e}",
+                nat.radius,
+                ge.radius,
+                ge.radius - nat.radius
+            );
+        }
+        if rel > worst_segs.0 {
+            worst_segs = (rel, seed);
+        }
+    }
+
     println!("\n=== SUMMARY");
     println!("cases: {total}");
-    println!("fails: {}  (boundary: {fails_b})", fails + fails_b);
+    println!(
+        "fails: {}  (boundary: {fails_b}, mixed: {fails_m})",
+        fails + fails_b + fails_m
+    );
     println!(
         "worst point rel gap: {:.3e} (seed {})",
         worst_pts.0, worst_pts.1

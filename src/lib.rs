@@ -55,6 +55,14 @@
 //! polygon contributes its edges rather than its interior. When the work cap
 //! trips, a rescan climbs from one representative per basin.
 //!
+//! The search finds the basin; it does not resolve the peak. Every maximum of the
+//! clearance is either equidistant from three obstacles or constrained by the
+//! region boundary, so after the climb both families are enumerated exactly
+//! rather than approached: the three-way apex in closed form, and the boundary as
+//! a one-dimensional maximum per edge. Searching for the answer directly is what
+//! keeps the result exact where a walk, whose steps cannot follow a region edge,
+//! stops a fraction short.
+//!
 //! The radius a result reports is always the measured distance from its centre
 //! to the nearest obstacle, so a returned circle is empty by construction.
 //!

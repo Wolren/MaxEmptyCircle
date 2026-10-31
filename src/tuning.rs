@@ -51,3 +51,23 @@ pub const MEC_POLISH_SEEDS: usize = 40;
 /// keeps one representative per neighbourhood instead of paying for every sample
 /// inside it.
 pub const MEC_POLISH_BASIN_DIVISIONS: usize = 48;
+/// Relative band around the incumbent clearance whose primitives enter the exact
+/// apex enumeration.
+///
+/// The apex is within one grid tolerance *in value* of the incumbent, but the two
+/// can be far apart *in position* when the field is flat, and a primitive active at
+/// the apex then sits further from the incumbent than the value gap suggests. The
+/// band is set from the flat-field case: a peak that clears the incumbent by a
+/// relative 1e-4 can have its third support up to about `sqrt(2 R delta) / R` away,
+/// which for a shallow basin is a few per-mille. Two percent covers that with room,
+/// and it costs nothing to be generous because the cap below, not the band, bounds
+/// the work.
+pub const MEC_APEX_BAND_REL: f64 = 2e-2;
+/// Most primitives the apex enumeration takes, nearest first.
+///
+/// Each primitive contributes up to three carriers, and a triple can only use one
+/// carrier per primitive, so the count is `27 * C(n, 3)`: six primitives is 540
+/// triples, a few tens of microseconds. The cap is a ceiling on a degenerate tie,
+/// not a normal case: a genuine apex is three-way, so a handful of primitives
+/// covers it with spares.
+pub const MEC_APEX_MAX_PRIMS: usize = 6;

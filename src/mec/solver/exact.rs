@@ -126,7 +126,7 @@ fn circumcentre_of_triangle(tri: &geo_types::Triangle<f64>) -> Option<(f64, f64)
 /// collinear at the same absolute error than three sites one unit apart, and an
 /// absolute test alone would accept the far one and divide by a vanishing
 /// determinant.
-fn circumcentre(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Option<(f64, f64)> {
+pub(crate) fn circumcentre(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Option<(f64, f64)> {
     let d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
 
     let scale = {

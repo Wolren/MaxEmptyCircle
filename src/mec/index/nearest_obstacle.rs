@@ -169,7 +169,7 @@ impl NearestObstacleIndex {
     }
 
     #[inline]
-    fn prim_distance_sq(&self, ordinal: usize, x: f64, y: f64) -> f64 {
+    pub(crate) fn prim_distance_sq(&self, ordinal: usize, x: f64, y: f64) -> f64 {
         let n_points = self.points.len();
         if ordinal < n_points {
             let p = self.points[ordinal];
@@ -298,6 +298,43 @@ impl NearestObstacleIndex {
             return out;
         }
         self.collect(0, x, y, max_dist_sq, &mut out);
+        out
+    }
+
+    /// Primitives within `max_dist_sq`, nearest first, at most `limit` of them.
+    ///
+    /// The apex refinement needs the local support set in distance order: the
+    /// primitives that can form the peak are the nearest few, so a cap has to
+    /// keep the closest ones rather than an arbitrary subset.
+    pub fn nearest_primitives(
+        &self,
+        x: f64,
+        y: f64,
+        max_dist_sq: f64,
+        limit: usize,
+    ) -> Vec<(f64, usize)> {
+        let total = self.points.len() + self.segments.len();
+        let mut out: Vec<(f64, usize)> = Vec::with_capacity(limit.min(total));
+        if total == 0 || limit == 0 {
+            return out;
+        }
+        if total <= LINEAR_SCAN_MAX {
+            for i in 0..total {
+                let d = self.prim_distance_sq(i, x, y);
+                if d <= max_dist_sq {
+                    out.push((d, i));
+                }
+            }
+        } else {
+            let prims = self.supporting_primitives(x, y, max_dist_sq);
+            out.extend(
+                prims
+                    .into_iter()
+                    .map(|i| (self.prim_distance_sq(i, x, y), i)),
+            );
+        }
+        out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        out.truncate(limit);
         out
     }
 

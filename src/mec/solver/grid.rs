@@ -24,6 +24,7 @@ use std::collections::BinaryHeap;
 use super::super::boundary::Region;
 use super::super::index::NearestObstacleIndex;
 use super::super::input::ObstacleSet;
+use super::apex::{refine_apex, refine_boundary};
 use crate::tuning;
 
 const SQRT2: f64 = std::f64::consts::SQRT_2;
@@ -241,9 +242,10 @@ pub fn solve_grid(
         return None;
     }
 
-    // Polish. The search ranks cells by a bound, so its incumbent is the best
+    // Polishing. The search ranks cells by a bound, so its incumbent is the best
     // sampled centre; on a plateau that can sit short of the peak. The climb
-    // fixes the local miss, the rescan fixes the basin choice.
+    // fixes the local miss, the rescan fixes the basin choice, and the exact
+    // enumeration of both maximum families below fixes the last fraction.
     // The cheap climb always runs: it costs a few dozen probes and fixes the
     // local miss at no measurable price.
     let mut best = (best_x, best_y, best_dist);
@@ -256,10 +258,18 @@ pub fn solve_grid(
     if exhausted_budget {
         best = polish_global(nb, region, best);
         // The recovery walk grows its step to cross plateaus, so it can stop a
-        // fraction short of the ridge crest. Shrink-only refinement from the best
-        // point closes that last gap.
+        // fraction short of a crest. Shrink-only refinement from the best point
+        // tightens the basin comparison that picks the winner.
         best = polish_descent(nb, region, best, tolerance * 1e-3, h_size * 0.25);
     }
+
+    // A maximum in the interior of the region is equidistant from three
+    // obstacles, and the search samples that apex only where its lattice falls.
+    // A maximum on the region boundary is one-dimensional along its edge, and no
+    // 2-D walk can follow an edge. Both families are enumerated exactly instead
+    // of approached; see `apex`.
+    best = refine_apex(set, nb, region, best);
+    best = refine_boundary(set, nb, region, best);
 
     // A collapsed region confines the centre to the obstacles themselves, where
     // the only valid answer is radius zero.
@@ -449,9 +459,9 @@ fn polish_global(
 
     let mut best = start;
     for (x, y, d) in picked {
-        let (px, py, pd) = polish(nb, region, (x, y, d), span * 1e-10, step_x.max(step_y));
-        if pd > best.2 {
-            best = (px, py, pd);
+        let grown = polish(nb, region, (x, y, d), span * 1e-10, step_x.max(step_y));
+        if grown.2 > best.2 {
+            best = grown;
         }
     }
     best
