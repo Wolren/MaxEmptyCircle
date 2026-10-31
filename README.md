@@ -4,6 +4,8 @@
 
 Finds the largest circle that fits between obstacles.
 
+[![crate](https://img.shields.io/crates/v/max-empty-circle.svg)](https://crates.io/crates/max-empty-circle)
+[![docs](https://docs.rs/max-empty-circle/badge.svg)](https://docs.rs/max-empty-circle)
 ![MSRV](https://img.shields.io/badge/rustc-1.88+-ab6000.svg)
 [![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](https://github.com/Wolren/MaxEmptyCircle/actions/workflows/ci.yml)
 [![GEOS](https://img.shields.io/badge/vs%20GEOS-6.32x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
@@ -12,33 +14,36 @@ Finds the largest circle that fits between obstacles.
 
 </div>
 
-The largest empty circle is the biggest circle that fits in open space. Obstacles
-are anything the circle must avoid: points, lines, or polygons, alone or mixed. An
+The largest empty circle is the biggest circle that fits in open space, and
+obstacles are anything it must avoid (points, lines, polygons, alone or mixed). An
 optional boundary restricts where the centre may sit, and it is a separate input
-from the obstacles: a building is an obstacle, a property line is a boundary. The
-reported radius is the measured clearance at the reported centre, so a returned
-circle is empty by construction. Input that encloses no area gives a zero-radius
-circle on the obstacle, as GEOS does.
+from the obstacles, because a building is an obstacle while a property line is a
+boundary. Since the reported radius is the measured clearance at the returned
+centre, a returned circle is empty by construction. Input that encloses no area
+yields a zero-radius circle on the obstacle, matching GEOS. The crate documentation
+ships with the code and carries the API reference and the algorithm detail. Run
+`cargo doc --open` and no feature is needed.
 
 ## Correctness
 
-`tests/geos_corpus.rs` ports the GEOS unit suite and its C API companion: 23 cases
-carrying GEOS's own WKT with its published centres and radii. All 23 pass.
+`tests/corpus_invariants.rs` checks two properties, and both come from the problem
+rather than from the solver.
 
-Three of those assert at least GEOS's radius rather than equality. GEOS's published
-expectations for polygon obstacles are not optimal, because its cell grid settles
-on a ridge before the true maximum. On 60 randomised polygon cases this crate is
-better 17 times, equal 43, worse 0.
+Fit comes first, which means the reported radius has to match the measured clearance
+at the reported centre, even when that radius is the smaller of the two. Reach
+comes second, and it forbids any dense sample inside the region from clearing more
+than the returned circle. That oracle shares no code with either solver.
 
-`tests/corpus_invariants.rs` checks two properties. The radius must equal the
-measured clearance at the reported centre, and no dense sample inside the region
-may clear more than the returned circle. Its oracle shares no code with either
-solver.
+`tests/geos_corpus.rs` ports the GEOS unit suite and its C API companion, 23 cases
+in all, each carrying GEOS's own WKT with its published centre and radius. All 23
+pass. Three of them assert at least GEOS's radius rather than equality,
+because the published expectations for polygon obstacles leave its grid short of
+the true maximum.
 
 `tests/geos_parity.rs` cross-checks 10 cases against a live GEOS, asserting fit,
 non-domination, and agreement.
 
-A randomised sweep of 900 cases runs in `examples/stress_parity.rs`:
+`examples/stress_parity.rs` sweeps 900 randomised cases.
 
 | Sweep | Cases | Failures | Worst relative gap |
 |-------|------:|---------:|-------------------:|
@@ -47,33 +52,49 @@ A randomised sweep of 900 cases runs in `examples/stress_parity.rs`:
 | Boundary-confined point sets | 100 | 0 | 0 |
 | Mixed points and segments | 200 | 0 | 0 |
 
-A failure means the native radius was materially below GEOS's, measured at 1e-6
-relative, and the worst relative gap is the largest amount by which GEOS beat the
-native answer. Both are zero on every sweep: no case loses to GEOS, and in the
-cases where the two disagree this crate returns the larger circle. One-off runs of
-10,000 segment and polygon cases and 4,000 sparse and mixed cases reported the same.
+It used to lose a few per-mille on segment sets. Nothing fails any more, and the
+worst relative gap is zero, which means that wherever the two answers part
+company this crate returns the larger circle. A failure would be a native radius
+materially below GEOS's at 1e-6 relative, and one-off runs of 10,000 segment and
+polygon cases plus 4,000 sparse and mixed cases reported the same. Getting there
+changed the grid path instead of its tuning.
+Since a maximum of the clearance field is either equidistant from three obstacles
+or pinned to the region boundary, a walk can resolve neither one (on a peak the
+field is flat to first order, and at a boundary optimum the only improving
+direction runs along the region edge). This is why both families are enumerated in
+closed form now.
 
-The gap used to be a per-mille on a handful of segment sets, and it was structural
-rather than a tuning miss. A maximum of the clearance field is either equidistant
-from three obstacles or pinned to the region boundary, and the grid path used to
-approach both with a walk. A walk cannot resolve either one: on a peak the field is
-flat to first order, and at a boundary optimum the only improving direction runs
-exactly along the region edge, which a compass step cannot take. Both families are
-now enumerated in closed form instead, which is why the sweep is clean rather than
-merely inside a tolerance.
+The workflow in `.github/workflows/ci.yml` runs the suite on every push and pull
+request, covering four feature sets plus the 1.88 MSRV check and a clippy, fmt, and
+rustdoc job. No CI check needs an external solver, because the GEOS comparison
+stays behind its own feature.
 
 ## Performance
 
-i5-12400F (6C/12T), release, MSVC, against GEOS 3.13.1 through its C API. Only the
-solve is timed: the GEOS geometry is parsed before the clock starts. Both sides get
-the same obstacles, region, and tolerance. Ratio is GEOS divided by native, so above
-1 means this crate wins. Both sides run serially, so the table measures the solver
-and not the threading.
+`examples/compare_geos.rs` holds 14 cases that cover both solve paths, and each
+solver receives the same obstacles, region, and tolerance. Only the solve is timed,
+since both sides build their geometry before the clock starts. Ratio is GEOS
+divided by native, so above 1 means this crate wins, and both sides run serially to
+measure the solver rather than the threading.
 
-Every figure is the best of five runs of a harness that itself takes the best of
-three repetitions, because a timing only drifts upward: the minimum is the cleanest
-estimate of the solve. Single-run figures published earlier are correspondingly
-higher, on both sides.
+Figures below come from an i5-12400F (6C/12T), release, MSVC, against GEOS 3.13.1
+through its C API.
+
+| Measure | MaxEmptyCircle | GEOS | Ratio |
+|---------|---------------:|-----:|------:|
+| total, 14 cases | **60.3 ms** | 381.0 ms | **6.32x** |
+| cases native solves faster | 13 of 14 | 1 of 14 | 93% |
+
+| Per-case ratio | Value |
+|----------------|------:|
+| p10 | 1.47x |
+| median | 7.98x |
+| p90 | 1087x |
+
+Each figure is the best of five runs of a runner that itself takes the best of
+three repetitions, because timings only drift upward and the minimum is the
+closest estimate of the solve. Repeat runs of this tree have landed between 6.32x
+and 6.33x, and that spread makes the second digit noise.
 
 | Case | Path | Primitives | MaxEmptyCircle | GEOS | Ratio |
 |------|------|-----------:|---------------:|-----:|------:|
@@ -92,27 +113,24 @@ higher, on both sides.
 | segments/256 | grid | 256 | 10.7 ms | 36.9 ms | 3.44x |
 | confined/points64 | exact | 64 | 280 us | 210 us | 0.75x |
 
-Total 6.32x, 13 of 14 cases faster, no case materially worse. The ratio varies by
-case: p10 1.47x, median 7.98x, p90 1087x. The spread is wider than it looks, because
-the ratio is a speed-up and the slowest case is bounded below by 1.
+Because the three `buildings/*` rows carry the exact refinement as a fixed cost
+per solve, they sit a few percent above an earlier table for the same shapes. Rows
+for segments and for the larger point sets sit below it. There the refinement
+replaced a per-basin descent that cost more than the refinement itself, so those
+rows got faster.
 
-The three `buildings/*` rows carry the exact refinement as a fixed cost per solve,
-so they sit a few percent above an earlier table's figures for the same shapes. The
-segment and large point-set rows sit below it, because the refinement replaced a
-per-basin descent that cost more than the refinement does.
+`confined/points64` is the only case where GEOS wins at 0.75x. A 64-site solve
+inside a small boundary is the reason, because the exact path then runs its full
+boundary family against a short ring, while GEOS's grid finishes first. An earlier
+run reported 1.3x here, and the difference was setup rather than solver work. The
+timed GEOS region included building and parsing the WKT, whereas the geometry is
+prepared before the clock starts now, so the figure covers the solve alone.
 
-`confined/points64` is the one case where GEOS wins, at 0.75x. It is a 64-site solve
-inside a small boundary, so the exact path runs its full boundary family against a
-short ring and GEOS's grid finishes first. An earlier run reported it at 1.3x because
-the timed GEOS region included building and parsing the WKT, which is setup rather
-than solver work; the geometry is now prepared before the clock starts, so the figure
-is the solve alone.
+Point-heavy rows are flattered by a large fixed cost in GEOS's branch-and-bound,
+and its 33 ms for 8 sites is mostly that overhead. Realistic work lands between
+1.5x and 11x.
 
-The point-heavy rows are flattered, because GEOS pays a large fixed cost in its
-branch-and-bound: its 33 ms for 8 sites is mostly overhead. The band on realistic
-work is 1.5x to 11x.
-
-Growth stays linear, fitted as `t = c * n^k` over doubling input sizes:
+Growth stays linear, fitted as `t = c * n^k` over doubling input sizes.
 
 | Sweep | Range | Exponent |
 |-------|-------|---------:|
@@ -121,19 +139,18 @@ Growth stays linear, fitted as `t = c * n^k` over doubling input sizes:
 
 `tests/scaling.rs` asserts both exponents stay under the subquadratic bound, so a
 complexity regression fails CI. Segment time is dominated by the recovery rescan,
-which is bounded by the region rather than the obstacle count, so it is flat until
-the index cost takes over.
+which is bounded by the region rather than the obstacle count, so it stays flat
+until the index cost takes over.
 
 The two solvers agree on the answer. The largest radius gap is 7.2e-8 relative
-across the 14 cases, and no randomised case out of the 900 is below GEOS at all. The
-point path is exact, so agreement there shows the exact enumeration and the
-iterative search reach the same optimum. The segment path is now enumerated for both
-families of maxima, so agreement means GEOS's own tolerance rather than a shared
-heuristic: where the two disagree, this crate returns the larger circle.
+across the 14 cases, and no randomised case out of the 900 lands below GEOS.
+Agreement on the point path shows the exact enumeration and the iterative search
+reaching the same optimum. It now means GEOS's own tolerance on the segment path,
+rather than a shared heuristic, because both families of maxima are enumerated.
 
 Regenerate with
-`cargo run --release --features bench-geos --example compare_geos`. The build
-needs the GEOS C library. `build.rs` reads `GEOS_LIB_DIR`, or falls back to
+`cargo run --release --features bench-geos --example compare_geos`. That build needs
+the GEOS C library, so `build.rs` reads `GEOS_LIB_DIR` or falls back to
 `geos-config` on `PATH`.
 
 ## Integration with the geo ecosystem
@@ -164,18 +181,17 @@ radius, and the path. A rejected input raises `ValueError`.
 
 ## C API
 
-`src/ffi.rs` is always compiled, so the C ABI needs no feature. Build with
-`cargo build --release`.
+`src/ffi.rs` is always compiled, so the C ABI needs no feature.
 
 | Symbol | Signature |
 |--------|-----------|
 | `mec_solve` | `(points, points_len, segments, segments_len, boundary, boundary_len, options, out) -> c_int` |
 | `mec_options_default` | `() -> MecOptionsC` |
 
-Flat `[x, y, ...]` point and `[x0, y0, x1, y1, ...]` segment arrays go in, and a
-zero `boundary_len` means no boundary.
-`MecResultC` and `MecOptionsC` are `#[repr(C)]`. Each function returns 0 on
-success and -1 on failure. A panic becomes -1, and a null or short buffer is
+Build with `cargo build --release`. Flat `[x, y, ...]` point and
+`[x0, y0, x1, y1, ...]` segment arrays go in, and a zero `boundary_len` means no
+boundary. `MecResultC` and `MecOptionsC` are `#[repr(C)]`. Each function returns 0
+on success and -1 on failure. A panic becomes -1, and a null or short buffer is
 rejected instead of crashing.
 
 ## Features
@@ -184,11 +200,11 @@ rejected instead of crashing.
 |---------|-------------|---------|
 | `geo-traits` | Generic solves over any `geo_traits` geometry | no |
 | `simd` | Four-lane `wide` batch for the climb probes | no |
-| `shewchuk` | Exact `orient2d` predicates from `robust` in the containment test | no |
+| `shewchuk` | Exact `orient2d` predicates from the `robust` crate in the containment test | no |
 | `hotpath` | `hotpath::measure` instrumentation on the solver entry points | no |
 | `python` | PyO3 extension module named `max_empty_circle` | no |
 | `extension-module` | Build the Python module as an importable extension | no |
-| `bench-geos` | Comparison only: links the GEOS C library for benchmarks and parity tests | no |
+| `bench-geos` | Comparison only. Links the GEOS C library for benchmarks and parity tests | no |
 
 `rayon` and `libc` are unconditional dependencies. The parallel batch
 `largest_empty_circle_slice` and the C ABI need no feature.

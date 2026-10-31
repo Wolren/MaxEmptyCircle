@@ -180,8 +180,8 @@ pub fn refine_apex(
 /// A 2-D walk cannot follow it: the only improving direction is *exactly* along
 /// the edge, every direction a compass can step in either leaves the region or
 /// moves inward, and the walk stops a fraction short. Two obstacles tied along one
-/// edge — the common case, since a gap between two obstacles ends where the region
-/// does — then costs a relative per-mille that ascent never recovers.
+/// edge, which is the common case since a gap between two obstacles ends where the
+/// region does. That tie costs a relative per-mille that ascent never recovers.
 ///
 /// So the boundary is solved rather than searched.
 ///
