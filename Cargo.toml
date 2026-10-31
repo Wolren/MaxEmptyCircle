@@ -1,10 +1,10 @@
 [package]
 name = "max-empty-circle"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "Finds the largest circle that fits between obstacles, using an exact Voronoi-vertex path for points and a branch-and-bound grid over a BVH for segments and polygons."
+description = "Finds the largest circle that fits between obstacles"
 repository = "https://github.com/Wolren/MaxEmptyCircle"
 documentation = "https://docs.rs/max-empty-circle"
 readme = "README.md"
