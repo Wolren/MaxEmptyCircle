@@ -6,7 +6,7 @@ Finds the largest circle that fits between obstacles.
 
 ![MSRV](https://img.shields.io/badge/rustc-1.88+-ab6000.svg)
 [![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](https://github.com/Wolren/MaxEmptyCircle/actions/workflows/ci.yml)
-[![GEOS](https://img.shields.io/badge/vs%20GEOS-7.34x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
+[![GEOS](https://img.shields.io/badge/vs%20GEOS-6.32x%20faster-blue.svg)](https://github.com/Wolren/MaxEmptyCircle#performance)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/Wolren/MaxEmptyCircle?tab=License-1-ov-file)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Wolren-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolren)
 
@@ -64,48 +64,53 @@ merely inside a tolerance.
 
 ## Performance
 
-i5-12400F (6C/12T), release, MSVC, against conda-forge GEOS 3.14.1 through its C
-API. Only the solve is timed: the GEOS geometry is parsed before the clock starts.
-Both sides get the same obstacles, region, and tolerance. Ratio is GEOS divided by
-native, so above 1 means this crate wins. Both sides run serially, so the table
-measures the solver and not the threading.
+i5-12400F (6C/12T), release, MSVC, against GEOS 3.13.1 through its C API. Only the
+solve is timed: the GEOS geometry is parsed before the clock starts. Both sides get
+the same obstacles, region, and tolerance. Ratio is GEOS divided by native, so above
+1 means this crate wins. Both sides run serially, so the table measures the solver
+and not the threading.
+
+Every figure is the best of five runs of a harness that itself takes the best of
+three repetitions, because a timing only drifts upward: the minimum is the cleanest
+estimate of the solve. Single-run figures published earlier are correspondingly
+higher, on both sides.
 
 | Case | Path | Primitives | MaxEmptyCircle | GEOS | Ratio |
 |------|------|-----------:|---------------:|-----:|------:|
-| points/8 | exact | 8 | 31 us | 34.4 ms | 1115x |
-| points/32 | exact | 32 | 180 us | 60.7 ms | 337x |
-| points/128 | exact | 128 | 2.23 ms | 16.9 ms | 7.6x |
-| points/512 | grid | 512 | 12.6 ms | 30.6 ms | 2.4x |
-| lattice/6x6 | exact | 36 | 132 us | 4.08 ms | 31x |
-| lattice/12x12 | exact | 144 | 2.14 ms | 23.0 ms | 11x |
-| lattice/20x20 | grid | 400 | 14.2 ms | 74.7 ms | 5.3x |
-| buildings/3x3 | grid | 36 | 513 us | 814 us | 1.6x |
-| buildings/6x6 | grid | 144 | 597 us | 4.73 ms | 7.9x |
-| buildings/10x10 | grid | 400 | 1.58 ms | 19.4 ms | 12x |
-| segments/16 | grid | 16 | 7.89 ms | 26.1 ms | 3.3x |
-| segments/64 | grid | 64 | 8.86 ms | 73.5 ms | 8.3x |
-| segments/256 | grid | 256 | 11.2 ms | 87.9 ms | 7.9x |
-| confined/points64 | exact | 64 | 388 us | 220 us | 0.57x |
+| points/8 | exact | 8 | 31 us | 33.4 ms | 1087x |
+| points/32 | exact | 32 | 167 us | 56.8 ms | 340x |
+| points/128 | exact | 128 | 1.91 ms | 15.9 ms | 8.35x |
+| points/512 | grid | 512 | 12.3 ms | 28.4 ms | 2.31x |
+| lattice/6x6 | exact | 36 | 122 us | 3.90 ms | 32x |
+| lattice/12x12 | exact | 144 | 1.91 ms | 21.3 ms | 11.2x |
+| lattice/20x20 | grid | 400 | 14.0 ms | 68.4 ms | 4.87x |
+| buildings/3x3 | grid | 36 | 531 us | 782 us | 1.47x |
+| buildings/6x6 | grid | 144 | 619 us | 4.49 ms | 7.25x |
+| buildings/10x10 | grid | 400 | 1.64 ms | 17.9 ms | 10.9x |
+| segments/16 | grid | 16 | 7.49 ms | 25.0 ms | 3.34x |
+| segments/64 | grid | 64 | 8.47 ms | 67.6 ms | 7.98x |
+| segments/256 | grid | 256 | 10.7 ms | 36.9 ms | 3.44x |
+| confined/points64 | exact | 64 | 280 us | 210 us | 0.75x |
 
-Total 7.33x, 13 of 14 cases faster, no case materially worse. The ratio varies by
-case: p10 1.59x, median 7.93x, p90 337x.
+Total 6.32x, 13 of 14 cases faster, no case materially worse. The ratio varies by
+case: p10 1.47x, median 7.98x, p90 1087x. The spread is wider than it looks, because
+the ratio is a speed-up and the slowest case is bounded below by 1.
 
-The three `buildings/*` rows were measured before the exact refinement landed. That
-pass is a fixed cost per solve, so those rows are a few percent slower than the
-table says. The segment and large point-set rows are faster than the table says,
-because the refinement replaced a per-basin descent that cost more than it did, so
-the total across the 14 cases drops by about 15 percent on the same machine.
+The three `buildings/*` rows carry the exact refinement as a fixed cost per solve,
+so they sit a few percent above an earlier table's figures for the same shapes. The
+segment and large point-set rows sit below it, because the refinement replaced a
+per-basin descent that cost more than the refinement does.
 
-`confined/points64` is the one case where GEOS wins, at 0.57x. It is a 64-site
-solve inside a small boundary, so the exact path runs its full boundary family
-against a short ring and GEOS's grid finishes first. An earlier run reported it at
-1.3x because the timed GEOS region included building and parsing the WKT, which is
-setup rather than solver work; the geometry is now prepared before the clock
-starts, so the figure is the solve alone.
+`confined/points64` is the one case where GEOS wins, at 0.75x. It is a 64-site solve
+inside a small boundary, so the exact path runs its full boundary family against a
+short ring and GEOS's grid finishes first. An earlier run reported it at 1.3x because
+the timed GEOS region included building and parsing the WKT, which is setup rather
+than solver work; the geometry is now prepared before the clock starts, so the figure
+is the solve alone.
 
 The point-heavy rows are flattered, because GEOS pays a large fixed cost in its
-branch-and-bound: its 34 ms for 8 sites is mostly overhead. The band on realistic
-work is 2.3x to 14x.
+branch-and-bound: its 33 ms for 8 sites is mostly overhead. The band on realistic
+work is 1.5x to 11x.
 
 Growth stays linear, fitted as `t = c * n^k` over doubling input sizes:
 
@@ -115,11 +120,11 @@ Growth stays linear, fitted as `t = c * n^k` over doubling input sizes:
 | Segment obstacles | 10 to 10k | k = 0.17 |
 
 `tests/scaling.rs` asserts both exponents stay under the subquadratic bound, so a
-complexity regression fails CI. Segment time is dominated by the recovery polish,
+complexity regression fails CI. Segment time is dominated by the recovery rescan,
 which is bounded by the region rather than the obstacle count, so it is flat until
 the index cost takes over.
 
-The two solvers agree on the answer. The largest radius gap is 8.6e-8 relative
+The two solvers agree on the answer. The largest radius gap is 7.2e-8 relative
 across the 14 cases, and no randomised case out of the 900 is below GEOS at all. The
 point path is exact, so agreement there shows the exact enumeration and the
 iterative search reach the same optimum. The segment path is now enumerated for both

@@ -319,4 +319,22 @@ fn main() {
         let p90 = ratios[((ratios.len() as f64 * 0.9) as usize).min(ratios.len() - 1)];
         println!("ratio p10 {p10:.2}x  median {median:.2}x  p90 {p90:.2}x");
     }
+
+    // Machine-readable form, for regenerating the README table without parsing the
+    // column layout above, which runs together when a field overflows. Run the
+    // binary several times and take the minimum per case: timings only drift
+    // upward, so the minimum is the cleanest estimate of the solve.
+    if std::env::var_os("MEC_BENCH_CSV").is_some() {
+        for row in &rows {
+            let path = match row.approach {
+                MecApproach::ExactVoronoi => "exact",
+                MecApproach::GridSolver => "grid",
+                MecApproach::Geos => "geos",
+            };
+            println!(
+                "CSV,{},{},{},{:.1},{:.1},{:.6},{:.6}",
+                row.name, path, row.prims, row.native_us, row.geos_us, row.native_r, row.geos_r
+            );
+        }
+    }
 }
