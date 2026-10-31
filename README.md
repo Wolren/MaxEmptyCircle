@@ -52,17 +52,16 @@ non-domination, and agreement.
 | Boundary-confined point sets | 100 | 0 | 0 |
 | Mixed points and segments | 200 | 0 | 0 |
 
-It used to lose a few per-mille on segment sets. Nothing fails any more, and the
-worst relative gap is zero, which means that wherever the two answers part
-company this crate returns the larger circle. A failure would be a native radius
-materially below GEOS's at 1e-6 relative, and one-off runs of 10,000 segment and
-polygon cases plus 4,000 sparse and mixed cases reported the same. Getting there
-changed the grid path instead of its tuning.
-Since a maximum of the clearance field is either equidistant from three obstacles
-or pinned to the region boundary, a walk can resolve neither one (on a peak the
-field is flat to first order, and at a boundary optimum the only improving
-direction runs along the region edge). This is why both families are enumerated in
-closed form now.
+A failure here means the native radius sat materially below GEOS's, at 1e-6
+relative. Every sweep reports zero, so wherever the two answers part company this
+crate returns the larger circle. One-off runs of 10,000 segment and polygon cases
+and 4,000 sparse and mixed cases agree.
+
+The grid path does not approach the maximum with a walk. A maximum of the clearance
+field is either equidistant from three obstacles or pinned to the region boundary,
+and a walk resolves neither: on a peak the field is flat to first order, and at a
+boundary optimum the only improving direction runs along the region edge. Both
+families are enumerated in closed form.
 
 The workflow in `.github/workflows/ci.yml` runs the suite on every push and pull
 request, covering four feature sets plus the 1.88 MSRV check and a clippy, fmt, and
@@ -113,18 +112,13 @@ and 6.33x, and that spread makes the second digit noise.
 | segments/256 | grid | 256 | 10.7 ms | 36.9 ms | 3.44x |
 | confined/points64 | exact | 64 | 280 us | 210 us | 0.75x |
 
-Because the three `buildings/*` rows carry the exact refinement as a fixed cost
-per solve, they sit a few percent above an earlier table for the same shapes. Rows
-for segments and for the larger point sets sit below it. There the refinement
-replaced a per-basin descent that cost more than the refinement itself, so those
-rows got faster.
+The refinement costs a fixed amount per solve, so its share grows as the input
+shrinks. buildings/3x3 is the smallest grid case and the closest row, at 1.47x.
 
 `confined/points64` is the only case where GEOS wins at 0.75x. A 64-site solve
-inside a small boundary is the reason, because the exact path then runs its full
-boundary family against a short ring, while GEOS's grid finishes first. An earlier
-run reported 1.3x here, and the difference was setup rather than solver work. The
-timed GEOS region included building and parsing the WKT, whereas the geometry is
-prepared before the clock starts now, so the figure covers the solve alone.
+inside a small boundary sends the exact path through its full boundary family
+against a short ring, while GEOS's grid finishes first. The timer covers the solve
+alone, so the figure excludes the cost of building either geometry.
 
 Point-heavy rows are flattered by a large fixed cost in GEOS's branch-and-bound,
 and its 33 ms for 8 sites is mostly that overhead. Realistic work lands between
@@ -144,8 +138,8 @@ until the index cost takes over.
 
 The two solvers agree on the answer. The largest radius gap is 7.2e-8 relative
 across the 14 cases, and no randomised case out of the 900 lands below GEOS.
-Agreement on the point path shows the exact enumeration and the iterative search
-reaching the same optimum. It now means GEOS's own tolerance on the segment path,
+On the point path that agreement shows the exact enumeration and the iterative
+search reaching the same optimum. On the segment path it means GEOS's own tolerance
 rather than a shared heuristic, because both families of maxima are enumerated.
 
 Regenerate with
